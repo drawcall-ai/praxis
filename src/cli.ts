@@ -1,0 +1,307 @@
+import { resolve, dirname } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
+import { config as loadEnv } from 'dotenv';
+import type { PraxisConfig, PraxisDefinition, PraxisSchema, TrainOptions } from './types.js';
+
+const DEFAULT_CONFIG = 'model.config.json';
+const DEFAULT_DEFINITION = 'model.definition.ts';
+
+const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
+const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
+const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
+const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
+const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+
+async function main() {
+  loadEnv();
+  loadEnv({ path: resolve(process.cwd(), '..', '.env') });
+  const args = process.argv.slice(2);
+
+  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+    printUsage();
+    process.exit(0);
+  }
+
+  const command = args[0];
+
+  if (command === 'train') await handleTrain(args.slice(1));
+  else if (command === 'run') await handleRun(args.slice(1));
+  else if (command === 'validate') await handleValidate(args.slice(1));
+  else {
+    console.error(`Unknown command: ${command}`);
+    printUsage();
+    process.exit(1);
+  }
+}
+
+function requireEnvKey(): string {
+  const key = process.env.OPENROUTER_KEY ?? process.env.OPENROUTER_API_KEY;
+  if (!key) {
+    console.error(`\n  ${bold('OPENROUTER_KEY')} is not set.\n`);
+    console.error(`  Add it to your ${dim('.env')} file:`);
+    console.error(`  OPENROUTER_KEY=sk-or-...\n`);
+    process.exit(1);
+  }
+  return key;
+}
+
+function formatZodSchema(schema: PraxisSchema): string {
+  const lines: string[] = [];
+
+  lines.push(`  ${dim('input')}`);
+  for (const [key, zodType] of Object.entries(schema.input.shape)) {
+    const zt = zodType as { _def: { typeName: string; values?: string[] }; description?: string };
+    const type = zt._def.typeName.replace('Zod', '').toLowerCase();
+    const desc = zt.description ? dim(` — ${zt.description}`) : '';
+    lines.push(`    ${cyan(key)} ${dim(type)}${desc}`);
+  }
+
+  lines.push(`  ${dim('output')}`);
+  for (const [key, zodType] of Object.entries(schema.output.shape)) {
+    const zt = zodType as { _def: { typeName: string; values?: string[] }; description?: string };
+    let type = zt._def.typeName.replace('Zod', '').toLowerCase();
+    if (type === 'enum' && zt._def.values) type = zt._def.values.join(' | ');
+    const desc = zt.description ? dim(` — ${zt.description}`) : '';
+    lines.push(`    ${cyan(key)} ${dim(type)}${desc}`);
+  }
+
+  return lines.join('\n');
+}
+
+// ── Train ────────────────────────────────────────────────────────────
+
+async function handleTrain(args: string[]) {
+  const definitionPath = args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_DEFINITION;
+
+  const options: TrainOptions = {
+    definitionPath: resolve(definitionPath),
+    output: resolve(flagValue(args, '--output', '-o') ?? DEFAULT_CONFIG),
+    optimizer: (flagValue(args, '--optimizer') ?? 'auto') as TrainOptions['optimizer'],
+    split: parseFloat(flagValue(args, '--split') ?? '0.7'),
+  };
+
+  loadEnv({ path: resolve(dirname(options.definitionPath), '.env') });
+  requireEnvKey();
+
+  const definition = await loadDefinition(options.definitionPath);
+  validateDefinition(definition);
+
+  const hasMultiple = !!definition.metrics && Object.keys(definition.metrics).length > 1;
+  const optimizer = options.optimizer === 'auto'
+    ? (hasMultiple ? 'gepa' : 'ace')
+    : options.optimizer;
+
+  console.log('');
+  console.log(`  ${bold(definition.model)} ${dim(`${optimizer.toUpperCase()} · ${definition.examples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split`)}`);
+  console.log('');
+  console.log(formatZodSchema(definition.schema));
+  console.log('');
+
+  const { train } = await import('./train.js');
+  const { config, testScore } = await train(definition, options);
+
+  await writeFile(options.output, JSON.stringify(config, null, 2));
+
+  console.log('');
+  console.log(`  ${green('✓')} ${bold(options.output)}`);
+  if (testScore !== null) {
+    console.log(`  ${green('✓')} test score ${bold(JSON.stringify(testScore))}`);
+  }
+  console.log('');
+}
+
+// ── Run ──────────────────────────────────────────────────────────────
+
+async function handleRun(args: string[]) {
+  const configPath = resolve(args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_CONFIG);
+
+  loadEnv({ path: resolve(dirname(configPath), '.env') });
+  requireEnvKey();
+
+  const raw = await readFile(configPath, 'utf-8');
+  const config: PraxisConfig = JSON.parse(raw);
+
+  const inputProps = (config.schema.input.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const inputFields = Object.entries(inputProps);
+
+  const cliInput: Record<string, unknown> = {};
+  let allProvided = true;
+
+  for (const [name, field] of inputFields) {
+    const value = flagValue(args, `--${name}`);
+    if (value != null) {
+      cliInput[name] = coerce(value, field.type as string);
+    } else {
+      allProvided = false;
+    }
+  }
+
+  if (!allProvided) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q: string): Promise<string> => new Promise((r) => rl.question(q, r));
+
+    console.log('');
+    for (const [name, field] of inputFields) {
+      if (name in cliInput) continue;
+      const desc = (field.description as string) ?? '';
+      const value = await ask(`  ${cyan(name)} ${dim(desc)}\n  ${dim('>')} `);
+      cliInput[name] = coerce(value, field.type as string);
+    }
+    rl.close();
+  }
+
+  await runModel(config, cliInput);
+}
+
+async function runModel(config: PraxisConfig, input: Record<string, unknown>) {
+  const { generateText } = await import('./generate.js');
+
+  const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let frame = 0;
+  const interval = setInterval(() => {
+    frame = (frame + 1) % spinner.length;
+    process.stdout.write(`\r  ${dim(spinner[frame])}`);
+  }, 80);
+
+  try {
+    const { object } = await generateText(config, input);
+
+    clearInterval(interval);
+    process.stdout.write('\r\x1b[K');
+    console.log(JSON.stringify(object, null, 2));
+  } catch (err: unknown) {
+    clearInterval(interval);
+    process.stdout.write('\r\x1b[K');
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`${bold('Error:')} ${msg}`);
+    process.exit(1);
+  }
+}
+
+// ── Validate ─────────────────────────────────────────────────────────
+
+async function handleValidate(args: string[]) {
+  const definitionPath = resolve(flagValue(args, '--definition', '-d') ?? DEFAULT_DEFINITION);
+  const configPath = resolve(args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_CONFIG);
+
+  const definition = await loadDefinition(definitionPath);
+  validateDefinition(definition);
+
+  const raw = await readFile(configPath, 'utf-8');
+  const config: PraxisConfig = JSON.parse(raw);
+
+  const { validateSchema } = await import('./schema.js');
+
+  let ok = true;
+
+  try {
+    validateSchema(definition.schema.input, config.schema.input, 'input');
+  } catch {
+    console.log(`  ${red('✗')} input schema mismatch`);
+    ok = false;
+  }
+
+  try {
+    validateSchema(definition.schema.output, config.schema.output, 'output');
+  } catch {
+    console.log(`  ${red('✗')} output schema mismatch`);
+    ok = false;
+  }
+
+  if (definition.model !== config.model) {
+    console.log(`  ${red('✗')} model mismatch: ${dim(definition.model)} ≠ ${dim(config.model)}`);
+    ok = false;
+  }
+
+  if (ok) {
+    console.log(`  ${green('✓')} config is in sync with definition`);
+  } else {
+    console.log(`\n  Run ${bold('npx praxis train')} to fix.\n`);
+    process.exit(1);
+  }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+function validateDefinition(def: PraxisDefinition) {
+  if (!def.schema?.input || !def.schema?.output)
+    throw new Error('Definition must export "schema" with input and output Zod objects');
+  if (!def.model || typeof def.model !== 'string')
+    throw new Error('Definition must export a "model" string');
+  if (!Array.isArray(def.examples))
+    throw new Error('Definition must export an "examples" array');
+  if (!def.metric && !def.metrics)
+    throw new Error('Definition must export "metric" or "metrics"');
+}
+
+async function loadDefinition(filePath: string): Promise<PraxisDefinition> {
+  const { ViteNodeRunner } = await import('vite-node/client');
+  const { ViteNodeServer } = await import('vite-node/server');
+  const { createServer } = await import('vite');
+
+  const viteServer = await createServer({
+    optimizeDeps: { disabled: true },
+    logLevel: 'silent',
+  });
+
+  await viteServer.pluginContainer.buildStart({});
+
+  const nodeServer = new ViteNodeServer(viteServer);
+  const runner = new ViteNodeRunner({
+    root: viteServer.config.root,
+    fetchModule(id) { return nodeServer.fetchModule(id); },
+    resolveId(id, importer) { return nodeServer.resolveId(id, importer); },
+  });
+
+  const mod = await runner.executeFile(filePath);
+  await viteServer.close();
+  return mod as PraxisDefinition;
+}
+
+function coerce(value: string, type: string): unknown {
+  if (type === 'number') return parseFloat(value);
+  if (type === 'boolean') return value === 'true' || value === '1' || value === 'yes';
+  return value;
+}
+
+function flagValue(args: string[], long: string, short?: string): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === long || (short && args[i] === short)) return args[i + 1];
+    if (args[i].startsWith(`${long}=`)) return args[i].slice(long.length + 1);
+  }
+  return undefined;
+}
+
+function printUsage() {
+  console.log(`
+  ${bold('praxis')} — Define, train, and use optimized LLM prompts
+
+  ${bold('Commands')}
+
+    ${cyan('train')} [definition] [options]
+      Optimize prompts from a definition file.
+      Default: ${dim(DEFAULT_DEFINITION)}
+
+      --output, -o <path>    Config output ${dim(`(default: ${DEFAULT_CONFIG})`)}
+      --optimizer <type>     ace | gepa | auto ${dim('(default: auto)')}
+      --split <ratio>        Train/test split ${dim('(default: 0.7)')}
+
+    ${cyan('run')} [config] [--field "value" ...]
+      Run the model with a trained config.
+      Default: ${dim(DEFAULT_CONFIG)}
+
+      All fields via flags → runs once, outputs JSON.
+      Missing fields → prompts for them first.
+
+    ${cyan('validate')} [config] [--definition, -d <path>]
+      Check that the config matches the definition schema.
+
+  ${dim('Requires OPENROUTER_KEY in env or .env file.')}
+`);
+}
+
+main().catch((err) => {
+  console.error(`\n  ${bold('Error:')} ${err.message ?? err}\n`);
+  process.exit(1);
+});

@@ -1,0 +1,41 @@
+{
+  "name": "@drawcall/praxis",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Define, train, and use optimized LLM prompts",
+  "bin": {
+    "praxis": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "prepublishOnly": "tsup"
+  },
+  "dependencies": {
+    "@ax-llm/ax": "^15.0.0",
+    "@openrouter/ai-sdk-provider": "^0.4.0",
+    "ai": "^4.0.0",
+    "dotenv": "^16.4.0",
+    "vite-node": "^3.0.0",
+    "zod": "^3.23.0",
+    "zod-to-json-schema": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
