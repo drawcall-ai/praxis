@@ -1,14 +1,19 @@
 import type { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-import type { PraxisSchema, PraxisConfigSchema, JsonSchema } from './types.js';
+import type { PraxisConfigSchema, JsonSchema } from './types.js';
+
+interface SchemaSource {
+  input: z.ZodObject<z.ZodRawShape>;
+  output: z.ZodObject<z.ZodRawShape>;
+}
 
 /**
- * Convert Zod schemas to JSON Schema for storage in model.config.json.
+ * Convert a definition's Zod schemas to JSON Schema for storage in model.config.json.
  */
-export function serializeSchema(schema: PraxisSchema): PraxisConfigSchema {
+export function serializeSchema(source: SchemaSource): PraxisConfigSchema {
   return {
-    input: zodToJsonSchema(schema.input, { target: 'jsonSchema7' }),
-    output: zodToJsonSchema(schema.output, { target: 'jsonSchema7' }),
+    input: zodToJsonSchema(source.input, { target: 'jsonSchema7' }),
+    output: zodToJsonSchema(source.output, { target: 'jsonSchema7' }),
   };
 }
 
@@ -34,12 +39,12 @@ export function validateSchema(
 }
 
 /**
- * Convert a Zod schema to an AX signature string.
+ * Convert a definition's schemas to an AX signature string.
  * e.g. 'reviewText:string "desc" -> sentiment:class "positive,negative,neutral" "desc"'
  */
-export function toAxSignature(schema: PraxisSchema): string {
-  const inputParts = zodObjectToAxFields(schema.input);
-  const outputParts = zodObjectToAxFields(schema.output);
+export function toAxSignature(source: SchemaSource): string {
+  const inputParts = zodObjectToAxFields(source.input);
+  const outputParts = zodObjectToAxFields(source.output);
   return `${inputParts.join(', ')} -> ${outputParts.join(', ')}`;
 }
 

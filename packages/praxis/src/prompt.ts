@@ -1,47 +1,38 @@
 import { z } from 'zod';
-import type { PraxisConfig, PraxisConfigSchema, JsonSchema, PromptResult } from './types.js';
-import { validateSchema } from './schema.js';
+import type { ModelDefinition, ModelConfig, ModelRequest, PraxisConfigSchema, JsonSchema } from './types.js';
+import { serializeSchema } from './schema.js';
 
 /**
- * Build system and user prompts from a trained config and input values.
- *
- * Pass your definition's output Zod schema as the third argument
- * to get a fully typed `schema.output` in the return value.
+ * Build a request from a definition and input.
+ * Optionally pass a trained config to use optimized instruction and demos.
  */
-export function buildPrompt<T extends z.ZodRawShape>(
-  config: PraxisConfig,
-  input: Record<string, unknown>,
-  outputSchema: z.ZodObject<T>,
-): PromptResult<T>;
-export function buildPrompt(
-  config: PraxisConfig,
-  input: Record<string, unknown>,
-): PromptResult;
-export function buildPrompt(
-  config: PraxisConfig,
-  input: Record<string, unknown>,
-  outputSchema?: z.ZodObject<z.ZodRawShape>,
-): PromptResult {
-  const { schema, optimization } = config;
+export function buildRequest<I extends z.ZodRawShape, O extends z.ZodRawShape>(
+  definition: ModelDefinition<I, O>,
+  input: z.infer<z.ZodObject<I>>,
+  config?: ModelConfig,
+): ModelRequest<O> {
+  const jsonSchema = config?.schema ?? serializeSchema({ input: definition.input, output: definition.output });
 
-  if (outputSchema) {
-    validateSchema(outputSchema, schema.output, 'output');
-  }
-
-  const system = optimization.instruction;
+  let system: string;
   const parts: string[] = [];
 
-  if (optimization.demos.length > 0) {
-    for (const demo of optimization.demos) {
-      parts.push(formatDemo(schema, demo.input, demo.output));
+  if (config) {
+    system = config.optimization.instruction;
+
+    if (config.optimization.demos.length > 0) {
+      for (const demo of config.optimization.demos) {
+        parts.push(formatDemo(jsonSchema, demo.input, demo.output));
+      }
+      parts.push('---');
+      parts.push('');
     }
-    parts.push('---');
-    parts.push('');
+  } else {
+    system = generateDefaultInstruction({ input: definition.input, output: definition.output });
   }
 
-  parts.push(formatInput(schema, input));
+  parts.push(formatInput(jsonSchema, input as Record<string, unknown>));
 
-  const outputFields = getFieldNames(schema.output);
+  const outputFields = getFieldNames(jsonSchema.output);
   parts.push('');
   parts.push(`Provide: ${outputFields.join(', ')}`);
 
@@ -49,9 +40,11 @@ export function buildPrompt(
     system,
     user: parts.join('\n'),
     schema: {
-      input: jsonSchemaToZod(schema.input),
-      output: outputSchema ?? jsonSchemaToZod(schema.output),
+      input: definition.input as z.ZodObject<z.ZodRawShape>,
+      output: definition.output,
     },
+    model: config?.model ?? definition.model,
+    metric: definition.metric as ModelRequest['metric'],
   };
 }
 
@@ -81,7 +74,6 @@ export function jsonSchemaToZod(jsonSchema: JsonSchema): z.ZodObject<z.ZodRawSha
 }
 
 function fieldToZod(field: Record<string, unknown>): z.ZodTypeAny {
-  // Enum
   if (field.enum && Array.isArray(field.enum)) {
     return z.enum(field.enum as [string, ...string[]]);
   }
@@ -114,7 +106,25 @@ function fieldToZod(field: Record<string, unknown>): z.ZodTypeAny {
   }
 }
 
-// ── Formatting helpers ───────────────────────────────────────────────
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function generateDefaultInstruction(def: { input: z.ZodObject<z.ZodRawShape>; output: z.ZodObject<z.ZodRawShape> }): string {
+  const inputFields = Object.entries(def.input.shape)
+    .map(([k, v]) => {
+      const desc = (v as z.ZodTypeAny).description;
+      return desc ? `${k} (${desc})` : k;
+    })
+    .join(', ');
+
+  const outputFields = Object.entries(def.output.shape)
+    .map(([k, v]) => {
+      const desc = (v as z.ZodTypeAny).description;
+      return desc ? `${k} (${desc})` : k;
+    })
+    .join(', ');
+
+  return `Given the input (${inputFields}), produce the output (${outputFields}). Be precise and follow the output schema exactly.`;
+}
 
 function getFieldNames(jsonSchema: JsonSchema): string[] {
   const props = jsonSchema.properties as Record<string, unknown> | undefined;

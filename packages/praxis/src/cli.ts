@@ -2,7 +2,7 @@ import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import { config as loadEnv } from 'dotenv';
-import type { PraxisConfig, PraxisDefinition, PraxisSchema, TrainOptions } from './types.js';
+import type { ModelConfig, ModelDefinition, TrainOptions } from './types.js';
 
 const DEFAULT_CONFIG = 'model.config.json';
 const DEFAULT_DEFINITION = 'model.definition.ts';
@@ -46,11 +46,11 @@ function requireEnvKey(): string {
   return key;
 }
 
-function formatZodSchema(schema: PraxisSchema): string {
+function formatZodSchema(definition: ModelDefinition): string {
   const lines: string[] = [];
 
   lines.push(`  ${dim('input')}`);
-  for (const [key, zodType] of Object.entries(schema.input.shape)) {
+  for (const [key, zodType] of Object.entries(definition.input.shape)) {
     const zt = zodType as { _def: { typeName: string; values?: string[] }; description?: string };
     const type = zt._def.typeName.replace('Zod', '').toLowerCase();
     const desc = zt.description ? dim(` — ${zt.description}`) : '';
@@ -58,7 +58,7 @@ function formatZodSchema(schema: PraxisSchema): string {
   }
 
   lines.push(`  ${dim('output')}`);
-  for (const [key, zodType] of Object.entries(schema.output.shape)) {
+  for (const [key, zodType] of Object.entries(definition.output.shape)) {
     const zt = zodType as { _def: { typeName: string; values?: string[] }; description?: string };
     let type = zt._def.typeName.replace('Zod', '').toLowerCase();
     if (type === 'enum' && zt._def.values) type = zt._def.values.join(' | ');
@@ -85,17 +85,12 @@ async function handleTrain(args: string[]) {
   requireEnvKey();
 
   const definition = await loadDefinition(options.definitionPath);
-  validateDefinition(definition);
-
-  const hasMultiple = !!definition.metrics && Object.keys(definition.metrics).length > 1;
-  const optimizer = options.optimizer === 'auto'
-    ? (hasMultiple ? 'gepa' : 'ace')
-    : options.optimizer;
+  validateDefinition(definition, true);
 
   console.log('');
-  console.log(`  ${bold(definition.model)} ${dim(`${optimizer.toUpperCase()} · ${definition.examples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split`)}`);
+  console.log(`  ${bold(definition.model)} ${dim(`${options.optimizer.toUpperCase()} · ${definition.examples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split`)}`);
   console.log('');
-  console.log(formatZodSchema(definition.schema));
+  console.log(formatZodSchema(definition));
   console.log('');
 
   const { train } = await import('./train.js');
@@ -114,16 +109,24 @@ async function handleTrain(args: string[]) {
 // ── Run ──────────────────────────────────────────────────────────────
 
 async function handleRun(args: string[]) {
+  const definitionPath = resolve(flagValue(args, '--definition', '-d') ?? DEFAULT_DEFINITION);
   const configPath = resolve(args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_CONFIG);
 
-  loadEnv({ path: resolve(dirname(configPath), '.env') });
+  loadEnv({ path: resolve(dirname(definitionPath), '.env') });
   requireEnvKey();
 
-  const raw = await readFile(configPath, 'utf-8');
-  const config: PraxisConfig = JSON.parse(raw);
+  const definition = await loadDefinition(definitionPath);
+  validateDefinition(definition, false);
 
-  const inputProps = (config.schema.input.properties ?? {}) as Record<string, Record<string, unknown>>;
-  const inputFields = Object.entries(inputProps);
+  let config: ModelConfig | undefined;
+  try {
+    const raw = await readFile(configPath, 'utf-8');
+    config = JSON.parse(raw);
+  } catch {
+    // No config — run without training
+  }
+
+  const inputFields = Object.entries(definition.schema.input.shape) as [string, { description?: string; _def: { typeName: string } }][];
 
   const cliInput: Record<string, unknown> = {};
   let allProvided = true;
@@ -131,7 +134,8 @@ async function handleRun(args: string[]) {
   for (const [name, field] of inputFields) {
     const value = flagValue(args, `--${name}`);
     if (value != null) {
-      cliInput[name] = coerce(value, field.type as string);
+      const type = field._def.typeName;
+      cliInput[name] = coerce(value, type === 'ZodNumber' ? 'number' : type === 'ZodBoolean' ? 'boolean' : 'string');
     } else {
       allProvided = false;
     }
@@ -144,17 +148,18 @@ async function handleRun(args: string[]) {
     console.log('');
     for (const [name, field] of inputFields) {
       if (name in cliInput) continue;
-      const desc = (field.description as string) ?? '';
+      const desc = field.description ?? '';
+      const type = field._def.typeName;
       const value = await ask(`  ${cyan(name)} ${dim(desc)}\n  ${dim('>')} `);
-      cliInput[name] = coerce(value, field.type as string);
+      cliInput[name] = coerce(value, type === 'ZodNumber' ? 'number' : type === 'ZodBoolean' ? 'boolean' : 'string');
     }
     rl.close();
   }
 
-  await runModel(config, cliInput);
+  await runModel(definition, cliInput, config);
 }
 
-async function runModel(config: PraxisConfig, input: Record<string, unknown>) {
+async function runModel(definition: ModelDefinition, input: Record<string, unknown>, config?: ModelConfig) {
   const { generateText } = await import('./generate.js');
 
   const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -165,11 +170,14 @@ async function runModel(config: PraxisConfig, input: Record<string, unknown>) {
   }, 80);
 
   try {
-    const { object } = await generateText(config, input);
+    const { object, score } = await generateText({ definition, input, config });
 
     clearInterval(interval);
     process.stdout.write('\r\x1b[K');
     console.log(JSON.stringify(object, null, 2));
+    if (score != null) {
+      console.log(`\n  ${dim('score:')} ${score}`);
+    }
   } catch (err: unknown) {
     clearInterval(interval);
     process.stdout.write('\r\x1b[K');
@@ -186,24 +194,24 @@ async function handleValidate(args: string[]) {
   const configPath = resolve(args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_CONFIG);
 
   const definition = await loadDefinition(definitionPath);
-  validateDefinition(definition);
+  validateDefinition(definition, false);
 
   const raw = await readFile(configPath, 'utf-8');
-  const config: PraxisConfig = JSON.parse(raw);
+  const config: ModelConfig = JSON.parse(raw);
 
   const { validateSchema } = await import('./schema.js');
 
   let ok = true;
 
   try {
-    validateSchema(definition.schema.input, config.schema.input, 'input');
+    validateSchema(definition.input, config.schema.input, 'input');
   } catch {
     console.log(`  ${red('✗')} input schema mismatch`);
     ok = false;
   }
 
   try {
-    validateSchema(definition.schema.output, config.schema.output, 'output');
+    validateSchema(definition.output, config.schema.output, 'output');
   } catch {
     console.log(`  ${red('✗')} output schema mismatch`);
     ok = false;
@@ -224,18 +232,18 @@ async function handleValidate(args: string[]) {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function validateDefinition(def: PraxisDefinition) {
-  if (!def.schema?.input || !def.schema?.output)
-    throw new Error('Definition must export "schema" with input and output Zod objects');
+function validateDefinition(def: ModelDefinition, requireMetric: boolean) {
+  if (!def.input || !def.output)
+    throw new Error('Definition must export "input" and "output" Zod objects');
   if (!def.model || typeof def.model !== 'string')
     throw new Error('Definition must export a "model" string');
   if (!Array.isArray(def.examples))
     throw new Error('Definition must export an "examples" array');
-  if (!def.metric && !def.metrics)
-    throw new Error('Definition must export "metric" or "metrics"');
+  if (requireMetric && !def.metric)
+    throw new Error('Definition must export a "metric" function');
 }
 
-async function loadDefinition(filePath: string): Promise<PraxisDefinition> {
+async function loadDefinition(filePath: string): Promise<ModelDefinition> {
   const { ViteNodeRunner } = await import('vite-node/client');
   const { ViteNodeServer } = await import('vite-node/server');
   const { createServer } = await import('vite');
@@ -256,7 +264,13 @@ async function loadDefinition(filePath: string): Promise<PraxisDefinition> {
 
   const mod = await runner.executeFile(filePath);
   await viteServer.close();
-  return mod as PraxisDefinition;
+
+  // Support default export (new pattern)
+  if (mod.default && typeof mod.default === 'object' && 'schema' in mod.default) {
+    return mod.default as ModelDefinition;
+  }
+  // Support named exports (legacy pattern)
+  return mod as ModelDefinition;
 }
 
 function coerce(value: string, type: string): unknown {
@@ -287,9 +301,10 @@ function printUsage() {
       --optimizer <type>     ace | gepa | auto ${dim('(default: auto)')}
       --split <ratio>        Train/test split ${dim('(default: 0.7)')}
 
-    ${cyan('run')} [config] [--field "value" ...]
-      Run the model with a trained config.
-      Default: ${dim(DEFAULT_CONFIG)}
+    ${cyan('run')} [config] [--definition, -d <path>] [--field "value" ...]
+      Run the model. Uses trained config if available.
+      Default definition: ${dim(DEFAULT_DEFINITION)}
+      Default config: ${dim(DEFAULT_CONFIG)}
 
       All fields via flags → runs once, outputs JSON.
       Missing fields → prompts for them first.

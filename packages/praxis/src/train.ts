@@ -1,17 +1,17 @@
 import { AxAIOpenRouter, AxGen, AxACE, AxGEPA } from '@ax-llm/ax';
 import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxOptimizationProgress } from '@ax-llm/ax';
 import type {
-  PraxisDefinition,
-  PraxisExample,
-  PraxisMetricFn,
-  PraxisConfig,
+  ModelDefinition,
+  ModelExample,
+  ModelMetricFn,
+  ModelConfig,
   PraxisDemo,
   TrainOptions,
 } from './types.js';
 import { toAxSignature, serializeSchema } from './schema.js';
 
 interface TrainResult {
-  config: PraxisConfig;
+  config: ModelConfig;
   testScore: number | Record<string, number> | null;
 }
 
@@ -78,32 +78,54 @@ function formatProgress(p: AxOptimizationProgress): string {
 }
 
 /**
+ * Probe the metric function with a sample example to determine if it returns
+ * a single number or a Record<string, number> (multi-metric).
+ */
+function probeMetricType(def: ModelDefinition): 'single' | 'multi' {
+  const example = def.examples[0];
+  if (!example || !def.metric) return 'single';
+
+  const ctx = {
+    input: example.input as Record<string, unknown>,
+    modelOutput: (example.output ?? {}) as Record<string, unknown>,
+    exampleOutput: example.output as Record<string, unknown> | undefined,
+  };
+
+  const result = def.metric(ctx);
+  if (result != null && typeof result === 'object') return 'multi';
+  return 'single';
+}
+
+/**
  * Run the full training pipeline.
  */
 export async function train(
-  definition: PraxisDefinition,
+  definition: ModelDefinition,
   options: Pick<TrainOptions, 'optimizer' | 'split'>,
 ): Promise<TrainResult> {
-  const { schema, examples, model } = definition;
+  const { examples, model } = definition;
   const progress = new Progress();
 
   if (examples.length < 10) {
     throw new Error(`At least 10 examples required, got ${examples.length}`);
   }
 
-  const hasMultipleMetrics = !!definition.metrics && Object.keys(definition.metrics).length > 1;
-  const hasSingleMetric = !!definition.metric || (definition.metrics && Object.keys(definition.metrics).length === 1);
-
-  if (!hasSingleMetric && !hasMultipleMetrics) {
-    throw new Error('Definition must export "metric" or "metrics"');
+  if (!definition.metric) {
+    throw new Error('Definition must export a "metric" function');
   }
+
+  // Validate metric against a sample example to catch null returns early
+  validateMetric(definition);
+
+  const metricType = probeMetricType(definition);
+  const isMulti = metricType === 'multi';
 
   let optimizerType = options.optimizer;
   if (optimizerType === 'auto') {
-    optimizerType = hasMultipleMetrics ? 'gepa' : 'ace';
+    optimizerType = isMulti ? 'gepa' : 'ace';
   }
 
-  const signature = toAxSignature(schema);
+  const signature = toAxSignature(definition);
 
   // ── Train/test split ─────────────────────────────────────────────
   const shuffled = [...examples].sort(() => Math.random() - 0.5);
@@ -120,9 +142,8 @@ export async function train(
   const ai = new AxAIOpenRouter({ apiKey, config: { model } });
   const program = new AxGen(signature);
 
-  const toAxExample = (ex: PraxisExample) => {
-    const { input, ...outputFields } = ex;
-    return { ...input, ...outputFields };
+  const toAxExample = (ex: ModelExample) => {
+    return { ...ex.input, ...(ex.output ?? {}) };
   };
 
   const axTrainExamples = trainExamples.map(toAxExample);
@@ -139,8 +160,7 @@ export async function train(
   let stats: Record<string, unknown> = {};
 
   if (optimizerType === 'ace') {
-    const metricFn = resolveMetric(definition);
-    const axMetric = adaptMetric(metricFn, schema);
+    const axMetric = adaptSingleMetric(definition);
 
     progress.spin('Optimizing');
 
@@ -148,14 +168,13 @@ export async function train(
     const result = await optimizer.compile(program, axTrainExamples, axMetric);
 
     instruction = renderPlaybook(result.playbook);
-    demos = extractDemos(result.demos, schema);
+    demos = extractDemos(result.demos, definition);
     bestScore = result.bestScore ?? 0;
     stats = result.stats ?? {};
 
     progress.done(`Optimized — score ${bestScore}`);
   } else {
-    const metricFns = resolveMetrics(definition);
-    const axMultiMetric = adaptMultiMetric(metricFns, schema);
+    const axMultiMetric = adaptMultiMetric(definition);
 
     progress.spin('Optimizing');
 
@@ -165,8 +184,8 @@ export async function train(
     const bestSolution = result.paretoFront?.[0];
     instruction = result.optimizedProgram?.instruction ?? '';
     demos = bestSolution
-      ? extractDemos(bestSolution.demos, schema)
-      : extractDemos(result.demos, schema);
+      ? extractDemos(bestSolution.demos, definition)
+      : extractDemos(result.demos, definition);
     bestScore = bestSolution?.scores ?? {};
     stats = result.stats ?? {};
 
@@ -185,7 +204,7 @@ export async function train(
 
     progress.spin('Evaluating');
 
-    testScore = await evaluate(ai, program, axTestExamples, definition, schema, () => {
+    testScore = await evaluate(ai, program, axTestExamples, definition, isMulti, () => {
       completed++;
       progress.set(`Evaluating ${dim(`${completed}/${total}`)}`);
     });
@@ -198,7 +217,7 @@ export async function train(
     config: {
       version: '1.0',
       model,
-      schema: serializeSchema(schema),
+      schema: serializeSchema(definition),
       optimization: {
         optimizer: optimizerType as 'ace' | 'gepa',
         instruction,
@@ -213,50 +232,81 @@ export async function train(
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function resolveMetric(def: PraxisDefinition): PraxisMetricFn {
-  if (def.metric) return def.metric;
-  if (def.metrics) {
-    const fns = Object.values(def.metrics);
-    if (fns.length === 1) return fns[0];
+function validateMetric(def: ModelDefinition): void {
+  const example = def.examples[0];
+  if (!example || !def.metric) return;
+
+  const ctx = {
+    input: example.input as Record<string, unknown>,
+    modelOutput: (example.output ?? {}) as Record<string, unknown>,
+    exampleOutput: example.output as Record<string, unknown> | undefined,
+  };
+
+  const result = def.metric(ctx);
+  if (result == null) {
+    throw new Error(
+      'Metric returned null/undefined for a training example. ' +
+      'If your metric requires the expected output, every example must include an "output" field. ' +
+      'For metrics that work without expected output, return a number instead of null.',
+    );
   }
-  throw new Error('No metric found');
 }
 
-function resolveMetrics(def: PraxisDefinition): Record<string, PraxisMetricFn> {
-  if (def.metrics && Object.keys(def.metrics).length > 1) return def.metrics;
-  if (def.metric) return { default: def.metric };
-  throw new Error('No metrics found');
-}
-
-function adaptMetric(fn: PraxisMetricFn, schema: PraxisDefinition['schema']): AxMetricFn {
-  const inputKeys = Object.keys(schema.input.shape);
-  const outputKeys = Object.keys(schema.output.shape);
+/**
+ * Wrap the user's metric as an AxMetricFn (single number).
+ * If the metric returns a Record, averages the values.
+ */
+function adaptSingleMetric(def: ModelDefinition): AxMetricFn {
+  const inputKeys = Object.keys(def.input.shape);
+  const outputKeys = Object.keys(def.output.shape);
+  const metricFn = def.metric!;
 
   return ({ prediction, example }) => {
     const input: Record<string, unknown> = {};
-    const pred: Record<string, unknown> = {};
+    const modelOutput: Record<string, unknown> = {};
     for (const k of inputKeys) input[k] = (prediction as Record<string, unknown>)[k] ?? example?.[k];
-    for (const k of outputKeys) pred[k] = (prediction as Record<string, unknown>)[k];
+    for (const k of outputKeys) modelOutput[k] = (prediction as Record<string, unknown>)[k];
 
-    let praxisExample: PraxisExample | undefined;
+    let exampleOutput: Record<string, unknown> | undefined;
     if (example) {
-      const exInput: Record<string, unknown> = {};
-      for (const k of inputKeys) exInput[k] = example[k];
-      praxisExample = { input: exInput };
-      for (const k of outputKeys) (praxisExample as Record<string, unknown>)[k] = example[k];
+      exampleOutput = {};
+      for (const k of outputKeys) exampleOutput[k] = example[k];
     }
 
-    return fn({ input, prediction: pred, example: praxisExample }) ?? 0;
+    const result = metricFn({ input, modelOutput, exampleOutput });
+    if (result == null) return 0;
+    if (typeof result === 'number') return result;
+    // Record — average all values
+    const vals = Object.values(result);
+    return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
   };
 }
 
-function adaptMultiMetric(fns: Record<string, PraxisMetricFn>, schema: PraxisDefinition['schema']): AxMultiMetricFn {
-  const adapted = Object.entries(fns).map(([name, fn]) => [name, adaptMetric(fn, schema)] as const);
+/**
+ * Wrap the user's metric as an AxMultiMetricFn.
+ * The metric must return a Record<string, number>.
+ */
+function adaptMultiMetric(def: ModelDefinition): AxMultiMetricFn {
+  const inputKeys = Object.keys(def.input.shape);
+  const outputKeys = Object.keys(def.output.shape);
+  const metricFn = def.metric!;
 
   return ({ prediction, example }) => {
-    const scores: Record<string, number> = {};
-    for (const [name, fn] of adapted) scores[name] = fn({ prediction, example });
-    return scores;
+    const input: Record<string, unknown> = {};
+    const modelOutput: Record<string, unknown> = {};
+    for (const k of inputKeys) input[k] = (prediction as Record<string, unknown>)[k] ?? example?.[k];
+    for (const k of outputKeys) modelOutput[k] = (prediction as Record<string, unknown>)[k];
+
+    let exampleOutput: Record<string, unknown> | undefined;
+    if (example) {
+      exampleOutput = {};
+      for (const k of outputKeys) exampleOutput[k] = example[k];
+    }
+
+    const result = metricFn({ input, modelOutput, exampleOutput });
+    if (result == null) return {};
+    if (typeof result === 'number') return { default: result };
+    return result;
   };
 }
 
@@ -270,10 +320,10 @@ function renderPlaybook(playbook: AxACEPlaybook): string {
   return lines.join('\n').trim();
 }
 
-function extractDemos(axDemos: AxProgramDemos<unknown, unknown>[] | undefined, schema: PraxisDefinition['schema']): PraxisDemo[] {
+function extractDemos(axDemos: AxProgramDemos<unknown, unknown>[] | undefined, def: ModelDefinition): PraxisDemo[] {
   if (!axDemos?.length) return [];
-  const inputKeys = Object.keys(schema.input.shape);
-  const outputKeys = Object.keys(schema.output.shape);
+  const inputKeys = Object.keys(def.input.shape);
+  const outputKeys = Object.keys(def.output.shape);
   const result: PraxisDemo[] = [];
 
   for (const demoGroup of axDemos) {
@@ -293,40 +343,38 @@ async function evaluate(
   ai: InstanceType<typeof AxAIOpenRouter>,
   program: InstanceType<typeof AxGen>,
   testExamples: Record<string, unknown>[],
-  definition: PraxisDefinition,
-  schema: PraxisDefinition['schema'],
+  definition: ModelDefinition,
+  isMulti: boolean,
   onProgress?: () => void,
 ): Promise<number | Record<string, number>> {
-  const hasMultiple = !!definition.metrics && Object.keys(definition.metrics).length > 1;
-
-  if (hasMultiple) {
-    const metrics = resolveMetrics(definition);
-    const scores: Record<string, number[]> = {};
-    for (const name of Object.keys(metrics)) scores[name] = [];
+  if (isMulti) {
+    const axMultiMetric = adaptMultiMetric(definition);
+    const allScores: Record<string, number[]> = {};
 
     for (const example of testExamples) {
       try {
         const result = await program.forward(ai, example);
-        for (const [name, fn] of Object.entries(metrics)) {
-          scores[name].push(adaptMetric(fn, schema)({ prediction: result, example }));
+        const scores = axMultiMetric({ prediction: result, example });
+        for (const [name, val] of Object.entries(scores)) {
+          (allScores[name] ??= []).push(val);
         }
       } catch { /* skip */ }
       onProgress?.();
     }
 
     return Object.fromEntries(
-      Object.entries(scores).map(([name, vals]) => [
+      Object.entries(allScores).map(([name, vals]) => [
         name, vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0,
       ]),
     );
   }
 
-  const adapted = adaptMetric(resolveMetric(definition), schema);
+  const axMetric = adaptSingleMetric(definition);
   const scores: number[] = [];
 
   for (const example of testExamples) {
     try {
-      scores.push(adapted({ prediction: await program.forward(ai, example), example }));
+      scores.push(axMetric({ prediction: await program.forward(ai, example), example }));
     } catch { /* skip */ }
     onProgress?.();
   }

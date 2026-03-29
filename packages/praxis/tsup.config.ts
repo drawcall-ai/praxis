@@ -15,6 +15,7 @@ const shared = {
     "@openrouter/ai-sdk-provider",
     "dotenv",
     "zod",
+    "zod-to-json-schema",
   ],
 };
 

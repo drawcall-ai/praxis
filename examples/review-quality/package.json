@@ -1,0 +1,17 @@
+{
+  "name": "@drawcall/example-review-quality",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx tsx --env-file=../../.env model.run.ts",
+    "train": "npx praxis train",
+    "run": "npx praxis run"
+  },
+  "dependencies": {
+    "@drawcall/praxis": "workspace:*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0"
+  }
+}
