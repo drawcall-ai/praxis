@@ -8,6 +8,10 @@
   },
   "author": "Bela Bohlender",
   "homepage": "https://drawcall.ai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/drawcall-ai/praxis"
+  },
   "keywords": [
     "drawcall.ai",
     "LLM",
