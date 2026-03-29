@@ -15,7 +15,7 @@ npm install @drawcall/praxis
 Or add it as a skill for your coding agent ([Claude Code, Cursor, Copilot, Codex, Gemini CLI, and more](https://agentskills.io)):
 
 ```bash
-npx skills add drawcall/praxis
+npx skills add drawcall-ai/praxis
 ```
 
 ## Workflow: Define → Train (optional) → Build → Run

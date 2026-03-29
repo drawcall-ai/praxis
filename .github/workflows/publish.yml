@@ -51,6 +51,9 @@ jobs:
       - name: Set Version
         run: pnpm -F './packages/**/*' exec json -f "package.json" -I -e 'this.version = "${{ steps.gitversion.outputs.fullSemVer }}"'
 
+      - name: Copy README
+        run: cp README.md packages/praxis/README.md
+
       - name: Publish praxis
         working-directory: ./packages/praxis
         run: pnpm publish --access public --no-git-checks --tag latest
