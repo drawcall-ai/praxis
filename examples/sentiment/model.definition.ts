@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
-  model: 'anthropic/claude-sonnet-4',
+  model: 'google/gemini-3-flash-preview',
 
   input: z.object({
     reviewText: z.string().describe('The text of the product review to analyze'),

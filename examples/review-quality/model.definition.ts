@@ -7,7 +7,7 @@ import { defineModel } from '@drawcall/praxis';
  * GEPA optimizer for multi-objective optimization.
  */
 export default defineModel({
-  model: 'anthropic/claude-sonnet-4',
+  model: 'google/gemini-3-flash-preview',
 
   input: z.object({
     reviewText: z.string().describe('The product review to evaluate'),

@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
-  model: 'anthropic/claude-sonnet-4',
+  model: 'google/gemini-3-flash-preview',
 
   input: z.object({
     text: z.string().describe('The input text'),
@@ -99,21 +99,21 @@ import { generateText } from '@drawcall/praxis';
 import modelDefinition from './model.definition.js';
 
 // Without training
-const { object, score } = await generateText({
+const { output, score } = await generateText({
   definition: modelDefinition,
   input: { text: 'Hello' },
 });
 
 // With training
 import modelConfig from './model.config.json';
-const { object, score } = await generateText({
+const { output, score } = await generateText({
   definition: modelDefinition,
   input: { text: 'Hello' },
   config: modelConfig,
 });
 
 // With AI SDK options (temperature, topP, maxRetries, mode, seed, etc.)
-const { object } = await generateText({
+const { output } = await generateText({
   definition: modelDefinition,
   input: { text: 'Hello' },
   temperature: 0.5,

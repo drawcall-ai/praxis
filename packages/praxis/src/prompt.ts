@@ -54,7 +54,7 @@ export function buildRequest<I extends z.ZodRawShape, O extends z.ZodRawShape>(
 export function jsonSchemaToZod(jsonSchema: JsonSchema): z.ZodObject<z.ZodRawShape> {
   const props = (jsonSchema.properties ?? {}) as Record<string, Record<string, unknown>>;
   const required = new Set((jsonSchema.required ?? []) as string[]);
-  const shape: z.ZodRawShape = {};
+  const shape: Record<string, z.ZodTypeAny> = {};
 
   for (const [key, field] of Object.entries(props)) {
     let zodType: z.ZodTypeAny = fieldToZod(field);
@@ -92,14 +92,14 @@ function fieldToZod(field: Record<string, unknown>): z.ZodTypeAny {
     case 'object': {
       const nested = field.properties as Record<string, Record<string, unknown>> | undefined;
       if (nested) {
-        const shape: z.ZodRawShape = {};
+        const shape: Record<string, z.ZodTypeAny> = {};
         for (const [k, v] of Object.entries(nested)) {
           shape[k] = fieldToZod(v);
           if (v.description) shape[k] = shape[k].describe(v.description as string);
         }
         return z.object(shape);
       }
-      return z.record(z.unknown());
+      return z.record(z.string(), z.unknown());
     }
     default:
       return z.string();
@@ -116,14 +116,20 @@ function generateDefaultInstruction(def: { input: z.ZodObject<z.ZodRawShape>; ou
     })
     .join(', ');
 
-  const outputFields = Object.entries(def.output.shape)
+  const outputLines = Object.entries(def.output.shape)
     .map(([k, v]) => {
-      const desc = (v as z.ZodTypeAny).description;
-      return desc ? `${k} (${desc})` : k;
-    })
-    .join(', ');
+      const zt = v as z.ZodTypeAny;
+      const d = zt._def as unknown as Record<string, unknown>;
+      const defType = d.type as string;
+      const desc = zt.description ? ` — ${zt.description}` : '';
+      if (defType === 'enum') {
+        const values = Object.keys(d.entries as Record<string, string>).map(v => `"${v}"`).join(' | ');
+        return `  ${k}: ${values}${desc}`;
+      }
+      return `  ${k}: ${defType}${desc}`;
+    });
 
-  return `Given the input (${inputFields}), produce the output (${outputFields}). Be precise and follow the output schema exactly.`;
+  return `Given the input (${inputFields}), produce the output as a JSON object with these fields:\n${outputLines.join('\n')}\n\nBe precise and follow the output schema exactly.`;
 }
 
 function getFieldNames(jsonSchema: JsonSchema): string[] {

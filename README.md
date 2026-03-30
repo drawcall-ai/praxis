@@ -29,7 +29,7 @@ import { z } from 'zod';
 import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
-  model: 'anthropic/claude-sonnet-4',
+  model: 'google/gemini-3-flash-preview',
 
   input: z.object({
     reviewText: z.string().describe('The product review to analyze'),
@@ -81,7 +81,7 @@ const request = buildRequest(modelDefinition, { reviewText: '...' }, modelConfig
 import { generateText } from '@drawcall/praxis';
 import modelDefinition from './model.definition.js';
 
-const { object, score } = await generateText({
+const { output, score } = await generateText({
   definition: modelDefinition,
   input: { reviewText: 'Amazing product!' },
 });
@@ -99,7 +99,7 @@ Return a `Record<string, number>` from `metric` to evaluate on multiple dimensio
 
 ```ts
 export default defineModel({
-  model: 'anthropic/claude-sonnet-4',
+  model: 'google/gemini-3-flash-preview',
 
   input: z.object({
     reviewText: z.string().describe('The product review to evaluate'),
@@ -131,7 +131,7 @@ export default defineModel({
 `generateText` returns per-metric scores:
 
 ```ts
-const { object, score } = await generateText({
+const { output, score } = await generateText({
   definition: modelDefinition,
   input: { reviewText: '...' },
 });
@@ -144,7 +144,7 @@ The `output` field on examples is optional. This is useful for metrics that eval
 
 ```ts
 export default defineModel({
-  model: 'anthropic/claude-sonnet-4',
+  model: 'google/gemini-3-flash-preview',
 
   input: z.object({ text: z.string() }),
   output: z.object({ summary: z.string() }),

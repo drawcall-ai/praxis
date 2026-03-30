@@ -51,17 +51,17 @@ function formatZodSchema(definition: ModelDefinition): string {
 
   lines.push(`  ${dim('input')}`);
   for (const [key, zodType] of Object.entries(definition.input.shape)) {
-    const zt = zodType as { _def: { typeName: string; values?: string[] }; description?: string };
-    const type = zt._def.typeName.replace('Zod', '').toLowerCase();
+    const zt = zodType as { _def: { type: string; entries?: Record<string, string> }; description?: string };
+    const type = zt._def.type;
     const desc = zt.description ? dim(` — ${zt.description}`) : '';
     lines.push(`    ${cyan(key)} ${dim(type)}${desc}`);
   }
 
   lines.push(`  ${dim('output')}`);
   for (const [key, zodType] of Object.entries(definition.output.shape)) {
-    const zt = zodType as { _def: { typeName: string; values?: string[] }; description?: string };
-    let type = zt._def.typeName.replace('Zod', '').toLowerCase();
-    if (type === 'enum' && zt._def.values) type = zt._def.values.join(' | ');
+    const zt = zodType as { _def: { type: string; entries?: Record<string, string> }; description?: string };
+    let type = zt._def.type;
+    if (type === 'enum' && zt._def.entries) type = Object.keys(zt._def.entries).join(' | ');
     const desc = zt.description ? dim(` — ${zt.description}`) : '';
     lines.push(`    ${cyan(key)} ${dim(type)}${desc}`);
   }
@@ -126,7 +126,7 @@ async function handleRun(args: string[]) {
     // No config — run without training
   }
 
-  const inputFields = Object.entries(definition.schema.input.shape) as [string, { description?: string; _def: { typeName: string } }][];
+  const inputFields = Object.entries(definition.schema.input.shape) as [string, { description?: string; _def: { type: string } }][];
 
   const cliInput: Record<string, unknown> = {};
   let allProvided = true;
@@ -134,8 +134,8 @@ async function handleRun(args: string[]) {
   for (const [name, field] of inputFields) {
     const value = flagValue(args, `--${name}`);
     if (value != null) {
-      const type = field._def.typeName;
-      cliInput[name] = coerce(value, type === 'ZodNumber' ? 'number' : type === 'ZodBoolean' ? 'boolean' : 'string');
+      const type = field._def.type;
+      cliInput[name] = coerce(value, type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string');
     } else {
       allProvided = false;
     }
@@ -149,9 +149,9 @@ async function handleRun(args: string[]) {
     for (const [name, field] of inputFields) {
       if (name in cliInput) continue;
       const desc = field.description ?? '';
-      const type = field._def.typeName;
+      const type = field._def.type;
       const value = await ask(`  ${cyan(name)} ${dim(desc)}\n  ${dim('>')} `);
-      cliInput[name] = coerce(value, type === 'ZodNumber' ? 'number' : type === 'ZodBoolean' ? 'boolean' : 'string');
+      cliInput[name] = coerce(value, type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string');
     }
     rl.close();
   }
@@ -170,11 +170,11 @@ async function runModel(definition: ModelDefinition, input: Record<string, unkno
   }, 80);
 
   try {
-    const { object, score } = await generateText({ definition, input, config });
+    const { output, score } = await generateText({ definition, input, config });
 
     clearInterval(interval);
     process.stdout.write('\r\x1b[K');
-    console.log(JSON.stringify(object, null, 2));
+    console.log(JSON.stringify(output, null, 2));
     if (score != null) {
       console.log(`\n  ${dim('score:')} ${score}`);
     }
@@ -265,11 +265,9 @@ async function loadDefinition(filePath: string): Promise<ModelDefinition> {
   const mod = await runner.executeFile(filePath);
   await viteServer.close();
 
-  // Support default export (new pattern)
-  if (mod.default && typeof mod.default === 'object' && 'schema' in mod.default) {
+  if (mod.default && typeof mod.default === 'object' && 'input' in mod.default) {
     return mod.default as ModelDefinition;
   }
-  // Support named exports (legacy pattern)
   return mod as ModelDefinition;
 }
 

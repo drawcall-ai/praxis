@@ -31,13 +31,12 @@
     "prepublishOnly": "tsup"
   },
   "dependencies": {
-    "@ax-llm/ax": "^15.0.0",
-    "@openrouter/ai-sdk-provider": "^0.4.0",
-    "ai": "^4.0.0",
-    "dotenv": "^16.4.0",
-    "vite-node": "^3.0.0",
-    "zod": "^3.23.0",
-    "zod-to-json-schema": "^3.24.0"
+    "@ax-llm/ax": "^19.0.38",
+    "@openrouter/ai-sdk-provider": "^2.3.3",
+    "ai": "^6.0.141",
+    "dotenv": "^17.3.1",
+    "vite-node": "^6.0.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

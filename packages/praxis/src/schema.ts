@@ -1,5 +1,4 @@
-import type { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import { z } from 'zod';
 import type { PraxisConfigSchema, JsonSchema } from './types.js';
 
 interface SchemaSource {
@@ -12,8 +11,8 @@ interface SchemaSource {
  */
 export function serializeSchema(source: SchemaSource): PraxisConfigSchema {
   return {
-    input: zodToJsonSchema(source.input, { target: 'jsonSchema7' }),
-    output: zodToJsonSchema(source.output, { target: 'jsonSchema7' }),
+    input: z.toJSONSchema(source.input) as JsonSchema,
+    output: z.toJSONSchema(source.output) as JsonSchema,
   };
 }
 
@@ -26,7 +25,7 @@ export function validateSchema(
   configJsonSchema: JsonSchema,
   label: string,
 ): void {
-  const current = zodToJsonSchema(zodSchema, { target: 'jsonSchema7' });
+  const current = z.toJSONSchema(zodSchema) as JsonSchema;
   const currentStr = JSON.stringify(current, null, 2);
   const configStr = JSON.stringify(configJsonSchema, null, 2);
 
@@ -58,21 +57,22 @@ function zodObjectToAxFields(obj: z.ZodObject<z.ZodRawShape>): string[] {
 
 function zodTypeToAxField(name: string, zodType: z.ZodTypeAny): string {
   const description = zodType.description;
-  const def = zodType._def;
+  const def = zodType._def as unknown as Record<string, unknown>;
+  const defType = def.type as string;
 
-  if (def.typeName === 'ZodOptional' || def.typeName === 'ZodNullable' || def.typeName === 'ZodDefault') {
-    return zodTypeToAxField(name, def.innerType ?? def.type);
+  if (defType === 'optional' || defType === 'nullable' || defType === 'default') {
+    return zodTypeToAxField(name, (def.innerType ?? def.type) as z.ZodTypeAny);
   }
 
   let axType: string;
 
-  if (def.typeName === 'ZodEnum') {
-    axType = `class "${(def.values as string[]).join(',')}"`;
-  } else if (def.typeName === 'ZodNumber') {
+  if (defType === 'enum') {
+    axType = `class "${Object.keys(def.entries as Record<string, string>).join(',')}"`;
+  } else if (defType === 'number') {
     axType = 'number';
-  } else if (def.typeName === 'ZodBoolean') {
+  } else if (defType === 'boolean') {
     axType = 'boolean';
-  } else if (def.typeName === 'ZodArray') {
+  } else if (defType === 'array') {
     axType = 'string[]';
   } else {
     axType = 'string';
