@@ -8,6 +8,7 @@ import type {
   ModelMetricFn,
   ModelConfig,
   PraxisDemo,
+  PraxisEvalRun,
   TrainOptions,
 } from './types.js';
 import { toAxSignature, serializeSchema } from './schema.js';
@@ -15,6 +16,7 @@ import { toAxSignature, serializeSchema } from './schema.js';
 interface TrainResult {
   config: ModelConfig;
   testScore: number | Record<string, number> | null;
+  evalRuns: PraxisEvalRun[];
 }
 
 // ── Progress display ─────────────────────────────────────────────────
@@ -205,6 +207,7 @@ export async function train(
 
   // ── Evaluate on test set ─────────────────────────────────────────
   let testScore: number | Record<string, number> | null = null;
+  let evalRuns: PraxisEvalRun[] = [];
 
   if (testExamples.length > 0) {
     let completed = 0;
@@ -212,10 +215,13 @@ export async function train(
 
     progress.spin('Evaluating');
 
-    testScore = await evaluate(ai, program, axTestExamples, definition, isMulti, () => {
+    const evalResult = await evaluate(ai, program, axTestExamples, definition, isMulti, () => {
       completed++;
       progress.set(`Evaluating ${dim(`${completed}/${total}`)}`);
     });
+
+    testScore = evalResult.score;
+    evalRuns = evalResult.runs;
 
     progress.done(`Evaluated — test score ${JSON.stringify(testScore)}`);
   }
@@ -232,10 +238,12 @@ export async function train(
         instruction,
         demos,
         bestScore,
+        evalRuns,
         stats,
       },
     },
     testScore,
+    evalRuns,
   };
 }
 
@@ -348,6 +356,11 @@ function extractDemos(axDemos: readonly AxProgramDemos<unknown, unknown>[] | und
   return result;
 }
 
+interface EvalResult {
+  score: number | Record<string, number>;
+  runs: PraxisEvalRun[];
+}
+
 async function evaluate(
   ai: AxAIOpenRouter<string>,
   program: InstanceType<typeof AxGen>,
@@ -355,7 +368,23 @@ async function evaluate(
   definition: ModelDefinition,
   isMulti: boolean,
   onProgress?: () => void,
-): Promise<number | Record<string, number>> {
+): Promise<EvalResult> {
+  const inputKeys = Object.keys(definition.input.shape);
+  const outputKeys = Object.keys(definition.output.shape);
+  const runs: PraxisEvalRun[] = [];
+
+  const splitExample = (example: AxExample, prediction: Record<string, unknown>) => {
+    const input: Record<string, unknown> = {};
+    const expectedOutput: Record<string, unknown> = {};
+    const modelOutput: Record<string, unknown> = {};
+    for (const k of inputKeys) input[k] = example[k];
+    for (const k of outputKeys) {
+      expectedOutput[k] = example[k];
+      modelOutput[k] = prediction[k];
+    }
+    return { input, expectedOutput, modelOutput };
+  };
+
   if (isMulti) {
     const axMultiMetric = adaptMultiMetric(definition);
     const allScores: Record<string, number[]> = {};
@@ -363,7 +392,10 @@ async function evaluate(
     for (const example of testExamples) {
       try {
         const result = await program.forward(ai, example);
-        const scores = await axMultiMetric({ prediction: result, example });
+        const prediction = result as Record<string, unknown>;
+        const scores = await axMultiMetric({ prediction, example });
+        const { input, expectedOutput, modelOutput } = splitExample(example, prediction);
+        runs.push({ input, expectedOutput, modelOutput, score: scores });
         for (const [name, val] of Object.entries(scores)) {
           (allScores[name] ??= []).push(val);
         }
@@ -371,11 +403,12 @@ async function evaluate(
       onProgress?.();
     }
 
-    return Object.fromEntries(
+    const score = Object.fromEntries(
       Object.entries(allScores).map(([name, vals]) => [
         name, vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0,
       ]),
     );
+    return { score, runs };
   }
 
   const axMetric = adaptSingleMetric(definition);
@@ -383,10 +416,16 @@ async function evaluate(
 
   for (const example of testExamples) {
     try {
-      scores.push(await axMetric({ prediction: await program.forward(ai, example), example }));
+      const result = await program.forward(ai, example);
+      const prediction = result as Record<string, unknown>;
+      const s = await axMetric({ prediction, example });
+      const { input, expectedOutput, modelOutput } = splitExample(example, prediction);
+      runs.push({ input, expectedOutput, modelOutput, score: s });
+      scores.push(s);
     } catch { /* skip */ }
     onProgress?.();
   }
 
-  return scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+  const score = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+  return { score, runs };
 }

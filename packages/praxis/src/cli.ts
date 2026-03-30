@@ -11,6 +11,7 @@ import { ViteNodeRunner } from 'vite-node/client';
 import { train } from './train.js';
 import { generateText } from './generate.js';
 import { validateSchema } from './schema.js';
+import { startViewServer } from './view.js';
 import type { ModelConfig, ModelDefinition, TrainOptions } from './types.js';
 
 const DEFAULT_CONFIG = 'model.config.json';
@@ -291,6 +292,19 @@ async function handleValidate(opts: { definition?: string; config?: string }) {
   }
 }
 
+// ── View ───────────────────────────────────────────────────────
+
+async function handleView(opts: { definition?: string; config?: string; port: string }) {
+  const definitionPath = await resolveDefinitionPath(opts.definition);
+  const configPath = opts.config ? resolve(opts.config) : resolve(dirname(definitionPath), DEFAULT_CONFIG);
+
+  await startViewServer({
+    definitionPath,
+    configPath,
+    port: parseInt(opts.port, 10),
+  });
+}
+
 // ── CLI ─────────────────────────────────────────────────────────────
 
 loadEnvUp(process.cwd());
@@ -316,6 +330,14 @@ program
   .option('-c, --config <path>', 'config file (default: model.config.json next to definition)')
   .allowUnknownOption()
   .action((opts, cmd) => handleRun(opts, cmd.args));
+
+program
+  .command('view')
+  .description('Launch a web UI to inspect eval runs and test manually')
+  .option('-d, --definition <path>', 'definition file (default: auto-discover)')
+  .option('-c, --config <path>', 'config file (default: model.config.json next to definition)')
+  .option('-p, --port <port>', 'server port', '3473')
+  .action(handleView);
 
 program
   .command('validate')

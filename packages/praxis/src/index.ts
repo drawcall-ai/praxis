@@ -11,4 +11,5 @@ export type {
   PraxisConfigSchema,
   JsonSchema,
   PraxisDemo,
+  PraxisEvalRun,
 } from './types.js';

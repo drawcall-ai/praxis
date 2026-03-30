@@ -47,6 +47,13 @@ export interface PraxisDemo {
   output: Record<string, unknown>;
 }
 
+export interface PraxisEvalRun {
+  input: Record<string, unknown>;
+  expectedOutput: Record<string, unknown>;
+  modelOutput: Record<string, unknown>;
+  score: number | Record<string, number>;
+}
+
 export interface ModelConfig {
   version: string;
   model: string;
@@ -57,6 +64,7 @@ export interface ModelConfig {
     instruction: string;
     demos: PraxisDemo[];
     bestScore: number | Record<string, number>;
+    evalRuns?: PraxisEvalRun[];
     stats?: Record<string, unknown>;
   };
 }
