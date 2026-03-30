@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import type { ModelMessage } from 'ai';
 
 // ── Definition (defineModel) ────────────────────────────────────────
 
@@ -25,6 +26,7 @@ export interface ModelDefinition<
 > {
   model: string;
   teacher?: string;
+  description?: string;
   input: z.ZodObject<I>;
   output: z.ZodObject<O>;
   examples: ModelExample<I, O>[];
@@ -62,8 +64,7 @@ export interface ModelConfig {
 // ── Request (buildRequest) ──────────────────────────────────────────
 
 export interface ModelRequest<O extends z.ZodRawShape = z.ZodRawShape> {
-  system: string;
-  user: string;
+  messages: ModelMessage[];
   schema: {
     input: z.ZodObject<z.ZodRawShape>;
     output: z.ZodObject<O>;

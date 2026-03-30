@@ -1,44 +1,47 @@
 import { z } from 'zod';
-import type { ModelDefinition, ModelConfig, ModelRequest, PraxisConfigSchema, JsonSchema } from './types.js';
-import { serializeSchema } from './schema.js';
+import { AxSignature, AxPromptTemplate } from '@ax-llm/ax';
+import type { AxFieldValue } from '@ax-llm/ax';
+import type { ModelMessage } from 'ai';
+import type { ModelDefinition, ModelConfig, ModelRequest, JsonSchema } from './types.js';
+import { toAxSignature } from './schema.js';
 
 /**
  * Build a request from a definition and input.
- * Optionally pass a trained config to use optimized instruction and demos.
+ * Uses ax's AxPromptTemplate.render() — the same renderer ax uses internally
+ * during training — to produce the exact prompt with 100% parity.
  */
 export function buildRequest<I extends z.ZodRawShape, O extends z.ZodRawShape>(
   definition: ModelDefinition<I, O>,
   input: z.infer<z.ZodObject<I>>,
   config?: ModelConfig,
 ): ModelRequest<O> {
-  const jsonSchema = config?.schema ?? serializeSchema({ input: definition.input, output: definition.output });
+  const sig = AxSignature.create(toAxSignature(definition));
+  if (definition.description) sig.setDescription(definition.description);
 
-  let system: string;
-  const parts: string[] = [];
+  const template = new AxPromptTemplate(sig);
+  const demos = config?.optimization.demos.map(
+    (d) => ({ ...d.input, ...d.output }) as Record<string, AxFieldValue>,
+  );
 
-  if (config) {
-    system = config.optimization.instruction;
+  const rendered = template.render(input as Record<string, AxFieldValue>, { demos });
 
-    if (config.optimization.demos.length > 0) {
-      for (const demo of config.optimization.demos) {
-        parts.push(formatDemo(jsonSchema, demo.input, demo.output));
-      }
-      parts.push('---');
-      parts.push('');
+  const messages: ModelMessage[] = [];
+  for (const msg of rendered) {
+    if (msg.role === 'system') {
+      messages.push({ role: 'system', content: msg.content as string });
+    } else if (msg.role === 'assistant') {
+      messages.push({ role: 'assistant', content: msg.content as string });
+    } else if (msg.role === 'user') {
+      const content = msg.content;
+      messages.push({
+        role: 'user',
+        content: typeof content === 'string' ? content : JSON.stringify(content),
+      });
     }
-  } else {
-    system = generateDefaultInstruction({ input: definition.input, output: definition.output });
   }
 
-  parts.push(formatInput(jsonSchema, input as Record<string, unknown>));
-
-  const outputFields = getFieldNames(jsonSchema.output);
-  parts.push('');
-  parts.push(`Provide: ${outputFields.join(', ')}`);
-
   return {
-    system,
-    user: parts.join('\n'),
+    messages,
     schema: {
       input: definition.input as z.ZodObject<z.ZodRawShape>,
       output: definition.output,
@@ -104,54 +107,4 @@ function fieldToZod(field: Record<string, unknown>): z.ZodTypeAny {
     default:
       return z.string();
   }
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────
-
-function generateDefaultInstruction(def: { input: z.ZodObject<z.ZodRawShape>; output: z.ZodObject<z.ZodRawShape> }): string {
-  const inputFields = Object.entries(def.input.shape)
-    .map(([k, v]) => {
-      const desc = (v as z.ZodTypeAny).description;
-      return desc ? `${k} (${desc})` : k;
-    })
-    .join(', ');
-
-  const outputLines = Object.entries(def.output.shape)
-    .map(([k, v]) => {
-      const zt = v as z.ZodTypeAny;
-      const d = zt._def as unknown as Record<string, unknown>;
-      const defType = d.type as string;
-      const desc = zt.description ? ` — ${zt.description}` : '';
-      if (defType === 'enum') {
-        const values = Object.keys(d.entries as Record<string, string>).map(v => `"${v}"`).join(' | ');
-        return `  ${k}: ${values}${desc}`;
-      }
-      return `  ${k}: ${defType}${desc}`;
-    });
-
-  return `Given the input (${inputFields}), produce the output as a JSON object with these fields:\n${outputLines.join('\n')}\n\nBe precise and follow the output schema exactly.`;
-}
-
-function getFieldNames(jsonSchema: JsonSchema): string[] {
-  const props = jsonSchema.properties as Record<string, unknown> | undefined;
-  return props ? Object.keys(props) : [];
-}
-
-function formatDemo(
-  schema: PraxisConfigSchema,
-  input: Record<string, unknown>,
-  output: Record<string, unknown>,
-): string {
-  const lines: string[] = [];
-  for (const key of getFieldNames(schema.input)) lines.push(`[${formatLabel(key)}] ${input[key] ?? ''}`);
-  for (const key of getFieldNames(schema.output)) lines.push(`[${formatLabel(key)}] ${output[key] ?? ''}`);
-  return lines.join('\n') + '\n';
-}
-
-function formatInput(schema: PraxisConfigSchema, input: Record<string, unknown>): string {
-  return getFieldNames(schema.input).map((key) => `[${formatLabel(key)}] ${input[key] ?? ''}`).join('\n');
-}
-
-function formatLabel(key: string): string {
-  return key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }

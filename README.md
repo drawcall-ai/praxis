@@ -30,6 +30,8 @@ import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
   model: 'google/gemini-3-flash-preview',
+  teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model for optimization
+  description: 'Classify product review sentiment with confidence.', // optional: task description
 
   input: z.object({
     reviewText: z.string().describe('The product review to analyze'),
@@ -72,7 +74,7 @@ import modelDefinition from './model.definition.js';
 import modelConfig from './model.config.json'; // optional
 
 const request = buildRequest(modelDefinition, { reviewText: '...' }, modelConfig);
-// → { system, user, schema, model, metric?, metrics? }
+// → { messages, schema, model, metric? }
 ```
 
 ### 4. Run

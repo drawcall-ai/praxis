@@ -48,6 +48,9 @@ jobs:
       - name: Typecheck
         run: pnpm -F './packages/**/*' typecheck
 
+      - name: Test
+        run: pnpm -F './packages/**/*' test
+
       - name: Build
         run: pnpm -F './packages/**/*' build
 

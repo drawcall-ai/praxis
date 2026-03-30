@@ -55,13 +55,19 @@ function zodObjectToAxFields(obj: z.ZodObject<z.ZodRawShape>): string[] {
   return fields;
 }
 
+interface ZodDef {
+  type: string;
+  innerType?: z.ZodTypeAny;
+  entries?: Record<string, string>;
+}
+
 function zodTypeToAxField(name: string, zodType: z.ZodTypeAny): string {
   const description = zodType.description;
-  const def = zodType._def as unknown as Record<string, unknown>;
-  const defType = def.type as string;
+  const def = (zodType as unknown as { def: ZodDef }).def;
+  const defType = def.type;
 
   if (defType === 'optional' || defType === 'nullable' || defType === 'default') {
-    return zodTypeToAxField(name, (def.innerType ?? def.type) as z.ZodTypeAny);
+    return zodTypeToAxField(name, def.innerType as z.ZodTypeAny);
   }
 
   let axType: string;

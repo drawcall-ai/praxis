@@ -46,8 +46,7 @@ export async function generateText<I extends z.ZodRawShape, O extends z.ZodRawSh
   const result = await aiGenerateText({
     ...options,
     model,
-    system: prompt.system,
-    prompt: prompt.user,
+    messages: prompt.messages,
     output: Output.object({ schema: prompt.schema.output }),
   });
 

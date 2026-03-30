@@ -146,6 +146,9 @@ export async function train(
     ? new AxAIOpenRouter<string>({ apiKey, config: { model: definition.teacher } })
     : undefined;
   const program = new AxGen(signature);
+  if (definition.description) {
+    program.setDescription(definition.description);
+  }
 
   const toAxExample = (ex: ModelExample): AxExample => {
     return { ...ex.input, ...(ex.output ?? {}) } as AxExample;
