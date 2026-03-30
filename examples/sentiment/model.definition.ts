@@ -3,6 +3,7 @@ import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
   model: 'google/gemini-3-flash-preview',
+  teacher: 'google/gemini-3.1-pro-preview',
 
   input: z.object({
     reviewText: z.string().describe('The text of the product review to analyze'),

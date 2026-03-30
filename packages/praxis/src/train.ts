@@ -1,5 +1,7 @@
 import { AxAIOpenRouter, AxGen, AxACE, AxGEPA } from '@ax-llm/ax';
-import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxOptimizationProgress } from '@ax-llm/ax';
+import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxOptimizationProgress, AxFieldValue } from '@ax-llm/ax';
+
+type AxExample = Record<string, AxFieldValue>;
 import type {
   ModelDefinition,
   ModelExample,
@@ -139,11 +141,14 @@ export async function train(
     throw new Error('OPENROUTER_KEY not found in environment.');
   }
 
-  const ai = new AxAIOpenRouter({ apiKey, config: { model } });
+  const ai = new AxAIOpenRouter<string>({ apiKey, config: { model } });
+  const teacherAI = definition.teacher
+    ? new AxAIOpenRouter<string>({ apiKey, config: { model: definition.teacher } })
+    : undefined;
   const program = new AxGen(signature);
 
-  const toAxExample = (ex: ModelExample) => {
-    return { ...ex.input, ...(ex.output ?? {}) };
+  const toAxExample = (ex: ModelExample): AxExample => {
+    return { ...ex.input, ...(ex.output ?? {}) } as AxExample;
   };
 
   const axTrainExamples = trainExamples.map(toAxExample);
@@ -164,13 +169,13 @@ export async function train(
 
     progress.spin('Optimizing');
 
-    const optimizer = new AxACE({ studentAI: ai, onProgress });
+    const optimizer = new AxACE({ studentAI: ai, teacherAI, onProgress });
     const result = await optimizer.compile(program, axTrainExamples, axMetric);
 
     instruction = renderPlaybook(result.playbook);
     demos = extractDemos(result.demos, definition);
     bestScore = result.bestScore ?? 0;
-    stats = result.stats ?? {};
+    stats = { ...result.stats };
 
     progress.done(`Optimized — score ${bestScore}`);
   } else {
@@ -178,7 +183,7 @@ export async function train(
 
     progress.spin('Optimizing');
 
-    const optimizer = new AxGEPA({ studentAI: ai, onProgress });
+    const optimizer = new AxGEPA({ studentAI: ai, teacherAI, onProgress });
     const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric);
 
     const bestSolution = result.paretoFront?.[0];
@@ -187,7 +192,7 @@ export async function train(
       ? extractDemos(bestSolution.demos, definition)
       : extractDemos(result.demos, definition);
     bestScore = bestSolution?.scores ?? {};
-    stats = result.stats ?? {};
+    stats = { ...result.stats };
 
     const scoreStr = Object.entries(bestScore as Record<string, number>)
       .map(([k, v]) => `${k}: ${v}`)
@@ -217,6 +222,7 @@ export async function train(
     config: {
       version: '1.0',
       model,
+      ...(definition.teacher ? { teacher: definition.teacher } : {}),
       schema: serializeSchema(definition),
       optimization: {
         optimizer: optimizerType as 'ace' | 'gepa',
@@ -320,7 +326,7 @@ function renderPlaybook(playbook: AxACEPlaybook): string {
   return lines.join('\n').trim();
 }
 
-function extractDemos(axDemos: AxProgramDemos<unknown, unknown>[] | undefined, def: ModelDefinition): PraxisDemo[] {
+function extractDemos(axDemos: readonly AxProgramDemos<unknown, unknown>[] | undefined, def: ModelDefinition): PraxisDemo[] {
   if (!axDemos?.length) return [];
   const inputKeys = Object.keys(def.input.shape);
   const outputKeys = Object.keys(def.output.shape);
@@ -340,9 +346,9 @@ function extractDemos(axDemos: AxProgramDemos<unknown, unknown>[] | undefined, d
 }
 
 async function evaluate(
-  ai: InstanceType<typeof AxAIOpenRouter>,
+  ai: AxAIOpenRouter<string>,
   program: InstanceType<typeof AxGen>,
-  testExamples: Record<string, unknown>[],
+  testExamples: AxExample[],
   definition: ModelDefinition,
   isMulti: boolean,
   onProgress?: () => void,
@@ -354,7 +360,7 @@ async function evaluate(
     for (const example of testExamples) {
       try {
         const result = await program.forward(ai, example);
-        const scores = axMultiMetric({ prediction: result, example });
+        const scores = await axMultiMetric({ prediction: result, example });
         for (const [name, val] of Object.entries(scores)) {
           (allScores[name] ??= []).push(val);
         }
@@ -374,7 +380,7 @@ async function evaluate(
 
   for (const example of testExamples) {
     try {
-      scores.push(axMetric({ prediction: await program.forward(ai, example), example }));
+      scores.push(await axMetric({ prediction: await program.forward(ai, example), example }));
     } catch { /* skip */ }
     onProgress?.();
   }

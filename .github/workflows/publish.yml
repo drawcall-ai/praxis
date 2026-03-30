@@ -45,6 +45,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Typecheck
+        run: pnpm -F './packages/**/*' typecheck
+
       - name: Build
         run: pnpm -F './packages/**/*' build
 

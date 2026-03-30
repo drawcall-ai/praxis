@@ -1,0 +1,71 @@
+{
+  "version": "1.0",
+  "model": "google/gemini-3-flash-preview",
+  "teacher": "google/gemini-3.1-pro-preview",
+  "schema": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "reviewText": {
+          "type": "string",
+          "description": "The text of the product review to analyze"
+        }
+      },
+      "required": [
+        "reviewText"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "sentiment": {
+          "type": "string",
+          "enum": [
+            "positive",
+            "negative",
+            "neutral"
+          ],
+          "description": "The overall sentiment of the review"
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Confidence score between 0 and 1"
+        }
+      },
+      "required": [
+        "sentiment",
+        "confidence"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "optimization": {
+    "optimizer": "ace",
+    "instruction": "## Sentiment Analysis\n- When analyzing reviews, treat explicit phrases like 'Five stars' and 'Exceeded expectations', explicitly positive adjectives like 'amazing' or 'truly excellent', and expressions of customer loyalty (e.g., 'keep coming back to buy more') as strong indicators of positive sentiment and assign a high confidence score.\n- When analyzing reviews, treat explicit negative adjectives and complaints (e.g., 'damaged', 'unhelpful', 'waste of money') as strong indicators of negative sentiment and assign a high confidence score.\n- When analyzing reviews, treat purely factual statements devoid of evaluative language, praise, or complaints as indicators of neutral sentiment.\n- When analyzing reviews, treat mildly evaluative terms that indicate acceptability (e.g., 'okay', 'decent', 'fine') as positive sentiment, but assign a lower confidence score since they lack strong positive indicators.",
+    "demos": [],
+    "bestScore": 1,
+    "stats": {
+      "totalCalls": 8,
+      "successfulDemos": 0,
+      "estimatedTokenUsage": 0,
+      "earlyStopped": false,
+      "resourceUsage": {
+        "totalTokens": 0,
+        "totalTime": 226133,
+        "avgLatencyPerEval": 0,
+        "costByModel": {}
+      },
+      "convergenceInfo": {
+        "converged": true,
+        "finalImprovement": 1,
+        "stagnationRounds": 0,
+        "convergenceThreshold": 0.01
+      },
+      "bestScore": 1,
+      "bestConfiguration": {}
+    }
+  }
+}

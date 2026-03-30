@@ -13,9 +13,18 @@ const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 
+function loadEnvUp(from: string) {
+  let dir = resolve(from);
+  for (let i = 0; i < 10; i++) {
+    loadEnv({ path: resolve(dir, '.env') });
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+}
+
 async function main() {
-  loadEnv();
-  loadEnv({ path: resolve(process.cwd(), '..', '.env') });
+  loadEnvUp(process.cwd());
   const args = process.argv.slice(2);
 
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
@@ -46,22 +55,27 @@ function requireEnvKey(): string {
   return key;
 }
 
+interface ZodField {
+  def: { type: string; entries?: Record<string, string> };
+  description?: string;
+}
+
 function formatZodSchema(definition: ModelDefinition): string {
   const lines: string[] = [];
 
   lines.push(`  ${dim('input')}`);
   for (const [key, zodType] of Object.entries(definition.input.shape)) {
-    const zt = zodType as { _def: { type: string; entries?: Record<string, string> }; description?: string };
-    const type = zt._def.type;
+    const zt = zodType as unknown as ZodField;
+    const type = zt.def.type;
     const desc = zt.description ? dim(` — ${zt.description}`) : '';
     lines.push(`    ${cyan(key)} ${dim(type)}${desc}`);
   }
 
   lines.push(`  ${dim('output')}`);
   for (const [key, zodType] of Object.entries(definition.output.shape)) {
-    const zt = zodType as { _def: { type: string; entries?: Record<string, string> }; description?: string };
-    let type = zt._def.type;
-    if (type === 'enum' && zt._def.entries) type = Object.keys(zt._def.entries).join(' | ');
+    const zt = zodType as unknown as ZodField;
+    let type = zt.def.type;
+    if (type === 'enum' && zt.def.entries) type = Object.keys(zt.def.entries).join(' | ');
     const desc = zt.description ? dim(` — ${zt.description}`) : '';
     lines.push(`    ${cyan(key)} ${dim(type)}${desc}`);
   }
@@ -88,7 +102,8 @@ async function handleTrain(args: string[]) {
   validateDefinition(definition, true);
 
   console.log('');
-  console.log(`  ${bold(definition.model)} ${dim(`${options.optimizer.toUpperCase()} · ${definition.examples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split`)}`);
+  const teacherLabel = definition.teacher ? ` · teacher: ${definition.teacher}` : '';
+  console.log(`  ${bold(definition.model)} ${dim(`${options.optimizer.toUpperCase()} · ${definition.examples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
   console.log('');
   console.log(formatZodSchema(definition));
   console.log('');
@@ -126,7 +141,7 @@ async function handleRun(args: string[]) {
     // No config — run without training
   }
 
-  const inputFields = Object.entries(definition.schema.input.shape) as [string, { description?: string; _def: { type: string } }][];
+  const inputFields = Object.entries(definition.input.shape) as unknown as [string, ZodField][];
 
   const cliInput: Record<string, unknown> = {};
   let allProvided = true;
@@ -134,7 +149,7 @@ async function handleRun(args: string[]) {
   for (const [name, field] of inputFields) {
     const value = flagValue(args, `--${name}`);
     if (value != null) {
-      const type = field._def.type;
+      const type = field.def.type;
       cliInput[name] = coerce(value, type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string');
     } else {
       allProvided = false;
@@ -149,7 +164,7 @@ async function handleRun(args: string[]) {
     for (const [name, field] of inputFields) {
       if (name in cliInput) continue;
       const desc = field.description ?? '';
-      const type = field._def.type;
+      const type = field.def.type;
       const value = await ask(`  ${cyan(name)} ${dim(desc)}\n  ${dim('>')} `);
       cliInput[name] = coerce(value, type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string');
     }
@@ -219,6 +234,11 @@ async function handleValidate(args: string[]) {
 
   if (definition.model !== config.model) {
     console.log(`  ${red('✗')} model mismatch: ${dim(definition.model)} ≠ ${dim(config.model)}`);
+    ok = false;
+  }
+
+  if ((definition.teacher ?? undefined) !== (config.teacher ?? undefined)) {
+    console.log(`  ${red('✗')} teacher mismatch: ${dim(definition.teacher ?? 'none')} ≠ ${dim(config.teacher ?? 'none')}`);
     ok = false;
   }
 

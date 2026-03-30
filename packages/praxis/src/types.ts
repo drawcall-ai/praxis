@@ -24,6 +24,7 @@ export interface ModelDefinition<
   O extends z.ZodRawShape = z.ZodRawShape,
 > {
   model: string;
+  teacher?: string;
   input: z.ZodObject<I>;
   output: z.ZodObject<O>;
   examples: ModelExample<I, O>[];
@@ -47,6 +48,7 @@ export interface PraxisDemo {
 export interface ModelConfig {
   version: string;
   model: string;
+  teacher?: string;
   schema: PraxisConfigSchema;
   optimization: {
     optimizer: string;
