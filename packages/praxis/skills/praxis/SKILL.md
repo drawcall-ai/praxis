@@ -68,12 +68,14 @@ export default defineModel({
 npx praxis train
 ```
 
-Reads `model.definition.ts`, runs automatic prompt optimization, and writes `model.config.json`.
+Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob. Runs automatic prompt optimization and writes `model.config.json` next to the definition file.
 
 Options:
-- `--output, -o <path>` — output file (default: `model.config.json`)
+- `--output, -o <path>` — output file (default: `model.config.json` next to the definition)
 - `--optimizer <ace|gepa|auto>` — optimizer type (default: auto)
 - `--split <ratio>` — train/test split (default: 0.7)
+
+You can also pass an explicit definition path: `npx praxis train -d path/to/model.definition.ts`
 
 Training requires a metric and at least 10 examples. Without training, the model works using a default instruction generated from the schema.
 
@@ -93,6 +95,8 @@ const request = buildRequest(modelDefinition, { text: 'Hello' }, modelConfig);
 ```bash
 npx praxis run --text "Hello world"
 ```
+
+The definition and config are auto-discovered via glob. Use `-d <path>` to specify a definition explicitly.
 
 ### 5. Use in code
 
@@ -149,7 +153,7 @@ const { output } = await generateText({
    - Write 10+ examples with `{ input: {...}, output: {...} }` structure (`output` is optional when the metric doesn't need expected values)
    - Add a `metric` function (return a `number` for single, `Record<string, number>` for multi)
    - If the metric returns `null` during training, Praxis throws an error — ensure examples have `output` if the metric compares against it
-3. Tell them to set `OPENROUTER_KEY` in `.env` then run `npx praxis train` (optional)
+3. Tell them to set `OPENROUTER_KEY` in `.env` then run `npx praxis train` (auto-discovers the definition; optional)
 4. Show them how to use `buildRequest` / `generateText` in code, or `npx praxis run` from CLI
 
 ## Requirements

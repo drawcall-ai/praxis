@@ -36,7 +36,10 @@
     "@ax-llm/ax": "^19.0.38",
     "@openrouter/ai-sdk-provider": "^2.3.3",
     "ai": "^6.0.141",
+    "commander": "^14.0.3",
     "dotenv": "^17.3.1",
+    "ora": "^9.3.0",
+    "tinyglobby": "^0.2.15",
     "vite-node": "^6.0.0",
     "zod": "^4.3.6"
   },

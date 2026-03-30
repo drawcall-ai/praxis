@@ -62,7 +62,9 @@ export default defineModel({
 npx praxis train
 ```
 
-Optimizes the prompt and writes `model.config.json`. Training requires a metric and at least 10 examples — without it, Praxis generates a default instruction from the schema.
+Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob, optimizes the prompt, and writes `model.config.json` next to the definition file. You can also pass an explicit path: `npx praxis train -d path/to/model.definition.ts`.
+
+Training requires a metric and at least 10 examples — without it, Praxis generates a default instruction from the schema.
 
 Options: `--output, -o <path>` · `--optimizer <ace|gepa|auto>` · `--split <ratio>`
 
@@ -185,9 +187,9 @@ pnpm --filter @drawcall/example-review-quality dev
 
 | Command | Description |
 |---------|-------------|
-| `praxis train [definition]` | Optimize prompts from definition file |
-| `praxis run [--definition, -d <path>]` | Run inference (config optional) |
-| `praxis validate [config]` | Check config matches definition schema |
+| `praxis train [-d <path>]` | Optimize prompts (auto-discovers definition via glob) |
+| `praxis run [-d <path>] [-c <config>]` | Run inference (auto-discovers definition and config) |
+| `praxis validate [-d <path>] [-c <config>]` | Check config matches definition schema |
 
 ## Features
 

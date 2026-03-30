@@ -1,17 +1,48 @@
 import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
+import { Command } from 'commander';
+import ora from 'ora';
+import { glob } from 'tinyglobby';
 import { config as loadEnv } from 'dotenv';
+import { createServer } from 'vite';
+import { ViteNodeServer } from 'vite-node/server';
+import { ViteNodeRunner } from 'vite-node/client';
+import { train } from './train.js';
+import { generateText } from './generate.js';
+import { validateSchema } from './schema.js';
 import type { ModelConfig, ModelDefinition, TrainOptions } from './types.js';
 
 const DEFAULT_CONFIG = 'model.config.json';
-const DEFAULT_DEFINITION = 'model.definition.ts';
+const DEFINITION_GLOBS = ['**/model.definition.ts', '**/model.definition.js'];
+
+// ── Colors ──────────────────────────────────────────────────────────
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+async function findDefinition(): Promise<string> {
+  const matches = await glob(DEFINITION_GLOBS, {
+    ignore: ['**/node_modules/**', '**/dist/**'],
+    absolute: true,
+  });
+  if (matches.length === 0) {
+    console.error(`\n  Could not find model.definition.ts or model.definition.js\n`);
+    process.exit(1);
+  }
+  if (matches.length > 1) {
+    console.error(`\n  Found multiple definition files:\n`);
+    for (const m of matches) console.error(`    ${m}`);
+    console.error(`\n  Pass the path explicitly with -d to disambiguate.\n`);
+    process.exit(1);
+  }
+  return matches[0];
+}
 
 function loadEnvUp(from: string) {
   let dir = resolve(from);
@@ -20,27 +51,6 @@ function loadEnvUp(from: string) {
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
-  }
-}
-
-async function main() {
-  loadEnvUp(process.cwd());
-  const args = process.argv.slice(2);
-
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
-    printUsage();
-    process.exit(0);
-  }
-
-  const command = args[0];
-
-  if (command === 'train') await handleTrain(args.slice(1));
-  else if (command === 'run') await handleRun(args.slice(1));
-  else if (command === 'validate') await handleValidate(args.slice(1));
-  else {
-    console.error(`Unknown command: ${command}`);
-    printUsage();
-    process.exit(1);
   }
 }
 
@@ -53,6 +63,10 @@ function requireEnvKey(): string {
     process.exit(1);
   }
   return key;
+}
+
+async function resolveDefinitionPath(flag?: string): Promise<string> {
+  return flag ? resolve(flag) : await findDefinition();
 }
 
 interface ZodField {
@@ -83,16 +97,58 @@ function formatZodSchema(definition: ModelDefinition): string {
   return lines.join('\n');
 }
 
-// ── Train ────────────────────────────────────────────────────────────
+function validateDefinition(def: ModelDefinition, requireMetric: boolean) {
+  if (!def.input || !def.output)
+    throw new Error('Definition must export "input" and "output" Zod objects');
+  if (!def.model || typeof def.model !== 'string')
+    throw new Error('Definition must export a "model" string');
+  if (!Array.isArray(def.examples))
+    throw new Error('Definition must export an "examples" array');
+  if (requireMetric && !def.metric)
+    throw new Error('Definition must export a "metric" function');
+}
 
-async function handleTrain(args: string[]) {
-  const definitionPath = args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_DEFINITION;
+async function loadDefinition(filePath: string): Promise<ModelDefinition> {
+  const viteServer = await createServer({
+    optimizeDeps: { disabled: true },
+    logLevel: 'silent',
+  });
+
+  await viteServer.pluginContainer.buildStart({});
+
+  const nodeServer = new ViteNodeServer(viteServer);
+  const runner = new ViteNodeRunner({
+    root: viteServer.config.root,
+    fetchModule(id) { return nodeServer.fetchModule(id); },
+    resolveId(id, importer) { return nodeServer.resolveId(id, importer); },
+  });
+
+  const mod = await runner.executeFile(filePath);
+  await viteServer.close();
+
+  if (mod.default && typeof mod.default === 'object' && 'input' in mod.default) {
+    return mod.default as ModelDefinition;
+  }
+  return mod as ModelDefinition;
+}
+
+function coerce(value: string, type: string): unknown {
+  if (type === 'number') return parseFloat(value);
+  if (type === 'boolean') return value === 'true' || value === '1' || value === 'yes';
+  return value;
+}
+
+// ── Train ───────────────────────────────────────────────────────────
+
+async function handleTrain(opts: { definition?: string; output?: string; optimizer: string; split: string }) {
+  const definitionPath = await resolveDefinitionPath(opts.definition);
+  const defaultOutput = resolve(dirname(definitionPath), DEFAULT_CONFIG);
 
   const options: TrainOptions = {
-    definitionPath: resolve(definitionPath),
-    output: resolve(flagValue(args, '--output', '-o') ?? DEFAULT_CONFIG),
-    optimizer: (flagValue(args, '--optimizer') ?? 'auto') as TrainOptions['optimizer'],
-    split: parseFloat(flagValue(args, '--split') ?? '0.7'),
+    definitionPath,
+    output: opts.output ? resolve(opts.output) : defaultOutput,
+    optimizer: opts.optimizer as TrainOptions['optimizer'],
+    split: parseFloat(opts.split),
   };
 
   loadEnv({ path: resolve(dirname(options.definitionPath), '.env') });
@@ -108,7 +164,6 @@ async function handleTrain(args: string[]) {
   console.log(formatZodSchema(definition));
   console.log('');
 
-  const { train } = await import('./train.js');
   const { config, testScore } = await train(definition, options);
 
   await writeFile(options.output, JSON.stringify(config, null, 2));
@@ -121,11 +176,11 @@ async function handleTrain(args: string[]) {
   console.log('');
 }
 
-// ── Run ──────────────────────────────────────────────────────────────
+// ── Run ─────────────────────────────────────────────────────────────
 
-async function handleRun(args: string[]) {
-  const definitionPath = resolve(flagValue(args, '--definition', '-d') ?? DEFAULT_DEFINITION);
-  const configPath = resolve(args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_CONFIG);
+async function handleRun(opts: { definition?: string; config?: string }, extraArgs: string[]) {
+  const definitionPath = await resolveDefinitionPath(opts.definition);
+  const configPath = opts.config ? resolve(opts.config) : resolve(dirname(definitionPath), DEFAULT_CONFIG);
 
   loadEnv({ path: resolve(dirname(definitionPath), '.env') });
   requireEnvKey();
@@ -143,14 +198,15 @@ async function handleRun(args: string[]) {
 
   const inputFields = Object.entries(definition.input.shape) as unknown as [string, ZodField][];
 
+  // Parse dynamic --fieldName flags from extra args
   const cliInput: Record<string, unknown> = {};
   let allProvided = true;
 
   for (const [name, field] of inputFields) {
-    const value = flagValue(args, `--${name}`);
-    if (value != null) {
+    const idx = extraArgs.indexOf(`--${name}`);
+    if (idx !== -1 && idx + 1 < extraArgs.length) {
       const type = field.def.type;
-      cliInput[name] = coerce(value, type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string');
+      cliInput[name] = coerce(extraArgs[idx + 1], type === 'number' ? 'number' : type === 'boolean' ? 'boolean' : 'string');
     } else {
       allProvided = false;
     }
@@ -171,50 +227,35 @@ async function handleRun(args: string[]) {
     rl.close();
   }
 
-  await runModel(definition, cliInput, config);
-}
-
-async function runModel(definition: ModelDefinition, input: Record<string, unknown>, config?: ModelConfig) {
-  const { generateText } = await import('./generate.js');
-
-  const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-  let frame = 0;
-  const interval = setInterval(() => {
-    frame = (frame + 1) % spinner.length;
-    process.stdout.write(`\r  ${dim(spinner[frame])}`);
-  }, 80);
+  const spinner = ora({ text: 'Generating…', indent: 2 }).start();
 
   try {
-    const { output, score } = await generateText({ definition, input, config });
+    const { output, score } = await generateText({ definition, input: cliInput, config });
 
-    clearInterval(interval);
-    process.stdout.write('\r\x1b[K');
+    spinner.stop();
     console.log(JSON.stringify(output, null, 2));
     if (score != null) {
       console.log(`\n  ${dim('score:')} ${score}`);
     }
   } catch (err: unknown) {
-    clearInterval(interval);
-    process.stdout.write('\r\x1b[K');
+    spinner.fail('Generation failed');
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`${bold('Error:')} ${msg}`);
     process.exit(1);
   }
 }
 
-// ── Validate ─────────────────────────────────────────────────────────
+// ── Validate ────────────────────────────────────────────────────────
 
-async function handleValidate(args: string[]) {
-  const definitionPath = resolve(flagValue(args, '--definition', '-d') ?? DEFAULT_DEFINITION);
-  const configPath = resolve(args[0] && !args[0].startsWith('-') ? args[0] : DEFAULT_CONFIG);
+async function handleValidate(opts: { definition?: string; config?: string }) {
+  const definitionPath = await resolveDefinitionPath(opts.definition);
+  const configPath = opts.config ? resolve(opts.config) : resolve(dirname(definitionPath), DEFAULT_CONFIG);
 
   const definition = await loadDefinition(definitionPath);
   validateDefinition(definition, false);
 
   const raw = await readFile(configPath, 'utf-8');
   const config: ModelConfig = JSON.parse(raw);
-
-  const { validateSchema } = await import('./schema.js');
 
   let ok = true;
 
@@ -250,91 +291,40 @@ async function handleValidate(args: string[]) {
   }
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── CLI ─────────────────────────────────────────────────────────────
 
-function validateDefinition(def: ModelDefinition, requireMetric: boolean) {
-  if (!def.input || !def.output)
-    throw new Error('Definition must export "input" and "output" Zod objects');
-  if (!def.model || typeof def.model !== 'string')
-    throw new Error('Definition must export a "model" string');
-  if (!Array.isArray(def.examples))
-    throw new Error('Definition must export an "examples" array');
-  if (requireMetric && !def.metric)
-    throw new Error('Definition must export a "metric" function');
-}
+loadEnvUp(process.cwd());
 
-async function loadDefinition(filePath: string): Promise<ModelDefinition> {
-  const { ViteNodeRunner } = await import('vite-node/client');
-  const { ViteNodeServer } = await import('vite-node/server');
-  const { createServer } = await import('vite');
+const program = new Command()
+  .name('praxis')
+  .description('Define, train, and use optimized LLM prompts')
+  .version('0.0.0');
 
-  const viteServer = await createServer({
-    optimizeDeps: { disabled: true },
-    logLevel: 'silent',
-  });
+program
+  .command('train')
+  .description('Optimize prompts from a definition file (auto-discovers via glob)')
+  .option('-d, --definition <path>', 'definition file (default: auto-discover)')
+  .option('-o, --output <path>', 'config output path (default: model.config.json next to definition)')
+  .option('--optimizer <type>', 'ace | gepa | auto', 'auto')
+  .option('--split <ratio>', 'train/test split', '0.7')
+  .action(handleTrain);
 
-  await viteServer.pluginContainer.buildStart({});
+program
+  .command('run')
+  .description('Run the model (auto-discovers definition and config)')
+  .option('-d, --definition <path>', 'definition file (default: auto-discover)')
+  .option('-c, --config <path>', 'config file (default: model.config.json next to definition)')
+  .allowUnknownOption()
+  .action((opts, cmd) => handleRun(opts, cmd.args));
 
-  const nodeServer = new ViteNodeServer(viteServer);
-  const runner = new ViteNodeRunner({
-    root: viteServer.config.root,
-    fetchModule(id) { return nodeServer.fetchModule(id); },
-    resolveId(id, importer) { return nodeServer.resolveId(id, importer); },
-  });
+program
+  .command('validate')
+  .description('Check that the config matches the definition schema')
+  .option('-d, --definition <path>', 'definition file (default: auto-discover)')
+  .option('-c, --config <path>', 'config file (default: model.config.json next to definition)')
+  .action(handleValidate);
 
-  const mod = await runner.executeFile(filePath);
-  await viteServer.close();
-
-  if (mod.default && typeof mod.default === 'object' && 'input' in mod.default) {
-    return mod.default as ModelDefinition;
-  }
-  return mod as ModelDefinition;
-}
-
-function coerce(value: string, type: string): unknown {
-  if (type === 'number') return parseFloat(value);
-  if (type === 'boolean') return value === 'true' || value === '1' || value === 'yes';
-  return value;
-}
-
-function flagValue(args: string[], long: string, short?: string): string | undefined {
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === long || (short && args[i] === short)) return args[i + 1];
-    if (args[i].startsWith(`${long}=`)) return args[i].slice(long.length + 1);
-  }
-  return undefined;
-}
-
-function printUsage() {
-  console.log(`
-  ${bold('praxis')} — Define, train, and use optimized LLM prompts
-
-  ${bold('Commands')}
-
-    ${cyan('train')} [definition] [options]
-      Optimize prompts from a definition file.
-      Default: ${dim(DEFAULT_DEFINITION)}
-
-      --output, -o <path>    Config output ${dim(`(default: ${DEFAULT_CONFIG})`)}
-      --optimizer <type>     ace | gepa | auto ${dim('(default: auto)')}
-      --split <ratio>        Train/test split ${dim('(default: 0.7)')}
-
-    ${cyan('run')} [config] [--definition, -d <path>] [--field "value" ...]
-      Run the model. Uses trained config if available.
-      Default definition: ${dim(DEFAULT_DEFINITION)}
-      Default config: ${dim(DEFAULT_CONFIG)}
-
-      All fields via flags → runs once, outputs JSON.
-      Missing fields → prompts for them first.
-
-    ${cyan('validate')} [config] [--definition, -d <path>]
-      Check that the config matches the definition schema.
-
-  ${dim('Requires OPENROUTER_KEY in env or .env file.')}
-`);
-}
-
-main().catch((err) => {
+program.parseAsync().catch((err) => {
   console.error(`\n  ${bold('Error:')} ${err.message ?? err}\n`);
   process.exit(1);
 });

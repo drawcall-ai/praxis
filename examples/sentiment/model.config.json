@@ -44,7 +44,7 @@
   },
   "optimization": {
     "optimizer": "ace",
-    "instruction": "## Sentiment Analysis\n- When analyzing reviews, treat explicit phrases like 'Five stars' and 'Exceeded expectations', explicitly positive adjectives like 'amazing' or 'truly excellent', and expressions of customer loyalty (e.g., 'keep coming back to buy more') as strong indicators of positive sentiment and assign a high confidence score.\n- When analyzing reviews, treat explicit negative adjectives and complaints (e.g., 'damaged', 'unhelpful', 'waste of money') as strong indicators of negative sentiment and assign a high confidence score.\n- When analyzing reviews, treat purely factual statements devoid of evaluative language, praise, or complaints as indicators of neutral sentiment.\n- When analyzing reviews, treat mildly evaluative terms that indicate acceptability (e.g., 'okay', 'decent', 'fine') as positive sentiment, but assign a lower confidence score since they lack strong positive indicators.",
+    "instruction": "## Sentiment Analysis Guidelines\n- Explicit negative adjectives (e.g., 'Terrible') combined with descriptions of immediate product failure (e.g., 'broke after one day') are highly reliable indicators of negative sentiment and warrant maximum confidence scores.\n- Phrases like 'works fine', 'nothing special', 'okay for the price', and 'does what it says, no more no less' are strong indicators of neutral sentiment, as they convey that basic requirements are met without enthusiasm or disappointment.\n- Phrases explicitly advising against a product or service (e.g., 'would not recommend') are unambiguous indicators of negative sentiment and warrant high confidence scores.\n- Explicit positive language and phrases (e.g., 'Amazing', 'fast', 'love', 'Best purchase ever', 'truly excellent') and indicators of repeat purchases (e.g., 'keep coming back to buy more') are highly reliable indicators of positive sentiment and warrant maximum confidence scores.",
     "demos": [],
     "bestScore": 1,
     "stats": {
@@ -54,7 +54,7 @@
       "earlyStopped": false,
       "resourceUsage": {
         "totalTokens": 0,
-        "totalTime": 226133,
+        "totalTime": 220164,
         "avgLatencyPerEval": 0,
         "costByModel": {}
       },
