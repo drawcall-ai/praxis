@@ -46,7 +46,7 @@ export function buildRequest<I extends z.ZodRawShape, O extends z.ZodRawShape>(
       input: definition.input as z.ZodObject<z.ZodRawShape>,
       output: definition.output,
     },
-    model: config?.model ?? definition.model,
+    student: config?.student ?? definition.student,
     metric: definition.metric as ModelRequest['metric'],
   };
 }

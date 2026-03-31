@@ -31,7 +31,8 @@ export interface ModelDefinition<
   I extends z.ZodRawShape = z.ZodRawShape,
   O extends z.ZodRawShape = z.ZodRawShape,
 > {
-  model: string;
+  name?: string;
+  student: string;
   version?: string;
   teacher?: string;
   description?: string;
@@ -64,7 +65,7 @@ export interface PraxisEvalRun {
 
 export interface ModelConfig {
   version: string;
-  model: string;
+  student: string;
   teacher?: string;
   schema: PraxisConfigSchema;
   optimization: {
@@ -85,7 +86,7 @@ export interface ModelRequest<O extends z.ZodRawShape = z.ZodRawShape> {
     input: z.ZodObject<z.ZodRawShape>;
     output: z.ZodObject<O>;
   };
-  model: string;
+  student: string;
   metric?: ModelMetricFn;
 }
 

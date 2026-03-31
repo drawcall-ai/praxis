@@ -105,8 +105,8 @@ export function formatZodSchema(definition: ModelDefinition): string {
 export function validateDefinition(def: ModelDefinition, requireMetric: boolean) {
   if (!def.input || !def.output)
     throw new Error('Definition must export "input" and "output" Zod objects');
-  if (!def.model || typeof def.model !== 'string')
-    throw new Error('Definition must export a "model" string');
+  if (!def.student || typeof def.student !== 'string')
+    throw new Error('Definition must export a "student" string');
   const ex = def.examples;
   if (!Array.isArray(ex) && typeof ex !== 'function')
     throw new Error('Definition must export "examples" as an array or async function');

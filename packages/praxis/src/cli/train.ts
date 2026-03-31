@@ -77,7 +77,7 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
 
   console.log('');
   const teacherLabel = definition.teacher ? ` · teacher: ${definition.teacher}` : '';
-  console.log(`  ${bold(definition.model)} ${dim(`${options.optimizer.toUpperCase()} · ${resolvedExamples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
+  console.log(`  ${bold(definition.student)} ${dim(`${options.optimizer.toUpperCase()} · ${resolvedExamples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
   console.log('');
   console.log(formatZodSchema(definition));
   console.log('');
@@ -187,7 +187,7 @@ async function train(
   definition: ModelDefinition,
   options: Pick<TrainOptions, 'optimizer' | 'split'>,
 ): Promise<TrainResult> {
-  const { model } = definition;
+  const { student } = definition;
   const progress = new Progress();
 
   if (!Array.isArray(definition.examples)) {
@@ -228,7 +228,7 @@ async function train(
     throw new Error('OPENROUTER_KEY not found in environment.');
   }
 
-  const ai = new AxAIOpenRouter<string>({ apiKey, config: { model } });
+  const ai = new AxAIOpenRouter<string>({ apiKey, config: { model: student } });
   const teacherAI = definition.teacher
     ? new AxAIOpenRouter<string>({ apiKey, config: { model: definition.teacher } })
     : undefined;
@@ -315,7 +315,7 @@ async function train(
   return {
     config: {
       version: definition.version ?? '1.0',
-      model,
+      student,
       ...(definition.teacher ? { teacher: definition.teacher } : {}),
       schema: serializeSchema(definition),
       optimization: {

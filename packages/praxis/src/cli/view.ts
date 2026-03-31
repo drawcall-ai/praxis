@@ -77,7 +77,7 @@ async function startViewServer(entries: ViewEntry[], port: number) {
         : mod;
 
       // Validate minimum requirements
-      if (!definition.input || !definition.output || !definition.model) {
+      if (!definition.input || !definition.output || !definition.student) {
         console.error(`  ${red('✗')} ${dim(basename(dirname(entry.definitionPath)))} — invalid definition, skipping`);
         continue;
       }
@@ -112,10 +112,10 @@ async function startViewServer(entries: ViewEntry[], port: number) {
     if (url.pathname === '/api/models') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(models.map((m, i) => ({
-        name: m.name,
+        name: m.definition.name ?? m.name,
         index: i,
         trained: !!m.config,
-        model: m.definition.model,
+        student: m.definition.student,
       }))));
       return;
     }
@@ -150,7 +150,8 @@ async function startViewServer(entries: ViewEntry[], port: number) {
         inputFields,
         outputFields,
         hasMetric: !!model.definition.metric,
-        model: model.definition.model,
+        student: model.definition.student,
+        name: model.definition.name ?? null,
         description: model.definition.description ?? null,
         teacher: model.definition.teacher ?? null,
         version: model.definition.version ?? null,
@@ -452,6 +453,22 @@ function buildHTML(): string {
     word-break: break-word;
   }
 
+  .try-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 11px;
+    transition: all 0.15s;
+  }
+
+  .try-btn:hover {
+    color: var(--text);
+    border-color: var(--border-light);
+  }
+
   /* Playground */
   .playground {
     background: var(--surface);
@@ -591,7 +608,20 @@ function buildHTML(): string {
     .cell-value { max-width: 140px; }
     .model-tabs { overflow-x: auto; }
   }
+  .lucide { width: 14px; height: 14px; stroke-width: 2; vertical-align: -2px; }
+
+  .stat-label .lucide { width: 12px; height: 12px; vertical-align: -1px; opacity: 0.6; }
+
+  .tab .lucide { width: 14px; height: 14px; vertical-align: -2px; margin-right: 4px; }
+
+  .run-btn .lucide { width: 14px; height: 14px; vertical-align: -2px; margin-right: 2px; }
+
+  .try-btn .lucide { width: 12px; height: 12px; vertical-align: -1px; }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin 1s linear infinite; }
 </style>
+<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"><\/script>
 </head>
 <body>
 <div class="container">
@@ -606,9 +636,9 @@ function buildHTML(): string {
   <div class="stats" id="stats"></div>
 
   <div class="tabs" id="section-tabs">
-    <button class="tab active" data-tab="playground">Playground</button>
-    <button class="tab" data-tab="eval">Eval Runs</button>
-    <button class="tab" data-tab="prompt">Optimized Prompt</button>
+    <button class="tab active" data-tab="playground"><i data-lucide="play"></i> Playground</button>
+    <button class="tab" data-tab="eval"><i data-lucide="list"></i> Eval Runs</button>
+    <button class="tab" data-tab="prompt"><i data-lucide="pen-line"></i> Optimized Prompt</button>
   </div>
 
   <div class="tab-content active" id="tab-playground">
@@ -672,6 +702,14 @@ function buildHTML(): string {
     const trained = !!config;
     const opt = config?.optimization;
 
+    // Name in header
+    const headerEl = document.querySelector('header h1');
+    if (schema.name) {
+      headerEl.textContent = schema.name;
+    } else {
+      headerEl.textContent = 'Praxis';
+    }
+
     // Description
     const descEl = document.getElementById('model-desc');
     if (schema.description) {
@@ -684,37 +722,37 @@ function buildHTML(): string {
     // Stats — consistent single row for all models
     const statsEl = document.getElementById('stats');
     statsEl.innerHTML = '';
-    const addStat = (label, value, cls) => {
+    const addStat = (icon, label, value, cls) => {
       const d = document.createElement('div');
       d.className = 'stat';
-      d.innerHTML = '<div class="stat-label">' + label + '</div><div class="stat-value ' + (cls||'') + '" title="' + value + '">' + value + '</div>';
+      d.innerHTML = '<div class="stat-label"><i data-lucide="' + icon + '"></i> ' + label + '</div><div class="stat-value ' + (cls||'') + '" title="' + value + '">' + value + '</div>';
       statsEl.appendChild(d);
     };
 
-    // Always: model, status
-    const shortModel = schema.model.includes('/') ? schema.model.split('/').pop() : schema.model;
-    addStat('Model', shortModel);
-    addStat('Status', trained ? 'Trained' : 'Untrained', trained ? 'good' : 'muted');
+    // Always: student, status
+    const shortStudent = schema.student.includes('/') ? schema.student.split('/').pop() : schema.student;
+    addStat('zap', 'Student', shortStudent);
+    addStat('circle', 'Status', trained ? 'Trained' : 'Untrained', trained ? 'good' : 'muted');
 
     // Always: teacher if present
     if (schema.teacher) {
       const shortTeacher = schema.teacher.includes('/') ? schema.teacher.split('/').pop() : schema.teacher;
-      addStat('Teacher', shortTeacher);
+      addStat('graduation-cap', 'Teacher', shortTeacher);
     }
 
     // Trained-only: score
     if (trained) {
       if (typeof opt.bestScore === 'number') {
         const cls = opt.bestScore >= 0.8 ? 'good' : opt.bestScore >= 0.5 ? 'warn' : 'bad';
-        addStat('Score', opt.bestScore.toFixed(2), cls);
+        addStat('target', 'Score', opt.bestScore.toFixed(2), cls);
       } else if (typeof opt.bestScore === 'object') {
         const vals = Object.values(opt.bestScore);
         const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
         const cls = avg >= 0.8 ? 'good' : avg >= 0.5 ? 'warn' : 'bad';
-        addStat('Score', avg.toFixed(2), cls);
+        addStat('target', 'Score', avg.toFixed(2), cls);
       }
 
-      addStat('Optimizer', opt.optimizer.toUpperCase());
+      addStat('settings', 'Optimizer', opt.optimizer.toUpperCase());
     }
 
     // Show/hide trained-only section tabs
@@ -752,7 +790,7 @@ function buildHTML(): string {
 
       let html = '<table class="eval-table"><thead><tr><th>#</th>';
       for (const k of inputKeys) html += '<th>' + k + '</th>';
-      html += '<th>Expected</th><th>Predicted</th><th>Score</th></tr></thead><tbody>';
+      html += '<th>Expected</th><th>Predicted</th><th>Score</th><th></th></tr></thead><tbody>';
 
       runs.forEach((run, i) => {
         const score = run.score;
@@ -776,6 +814,7 @@ function buildHTML(): string {
         html += '<td><div class="cell-value">' + expected + '</div></td>';
         html += '<td><div class="cell-value">' + predicted + '</div></td>';
         html += '<td><span class="badge ' + badgeCls + '">' + scoreStr + '</span></td>';
+        html += '<td><button class="try-btn" title="Try in Playground" data-input="' + encodeURIComponent(JSON.stringify(run.input)) + '"><i data-lucide="play"></i></button></td>';
         html += '</tr>';
       });
 
@@ -806,7 +845,7 @@ function buildHTML(): string {
       fieldsHTML += '</div>';
     }
 
-    fieldsHTML += '<button type="submit" class="run-btn" id="run-btn">Run</button>';
+    fieldsHTML += '<button type="submit" class="run-btn" id="run-btn"><i data-lucide="play"></i> Run</button>';
     form.innerHTML = fieldsHTML;
 
     const resultArea = document.getElementById('result-area');
@@ -817,7 +856,8 @@ function buildHTML(): string {
       e.preventDefault();
       const btn = document.getElementById('run-btn');
       btn.disabled = true;
-      btn.textContent = 'Running...';
+      btn.innerHTML = '<i data-lucide="loader-2" class="lucide spin"></i> Running\u2026';
+      lucide.createIcons({ nodes: [btn] });
       resultArea.classList.add('visible');
       resultBox.innerHTML = '<div style="color:var(--text-muted)">Generating...</div>';
 
@@ -855,9 +895,30 @@ function buildHTML(): string {
       }
 
       btn.disabled = false;
-      btn.textContent = 'Run';
+      btn.innerHTML = '<i data-lucide="play"></i> Run';
+      lucide.createIcons({ nodes: [btn] });
     };
+
+    // Render all Lucide icons in the page
+    lucide.createIcons();
   }
+
+  // Try in Playground — fill form and switch tab
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.try-btn[data-input]');
+    if (!btn) return;
+    const input = JSON.parse(decodeURIComponent(btn.dataset.input));
+    const form = document.getElementById('run-form');
+    for (const [name, value] of Object.entries(input)) {
+      const el = form.querySelector('[name="' + name + '"]');
+      if (el) el.value = String(value);
+    }
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelector('[data-tab="playground"]').classList.add('active');
+    document.getElementById('tab-playground').classList.add('active');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  });
 
   // Section tab switching
   document.querySelectorAll('.tab').forEach(tab => {

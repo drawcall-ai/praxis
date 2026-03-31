@@ -39,7 +39,7 @@ export async function generateText<I extends z.ZodRawShape, O extends z.ZodRawSh
   });
 
   const model = wrapLanguageModel({
-    model: openrouter.chat(prompt.model),
+    model: openrouter.chat(prompt.student),
     middleware: extractJsonMiddleware(),
   });
 

@@ -29,7 +29,8 @@ import { z } from 'zod';
 import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
-  model: 'google/gemini-3-flash-preview',
+  name: 'Sentiment Analyzer', // optional: human-readable label shown in the web UI
+  student: 'google/gemini-3-flash-preview',
   version: '1.0', // optional: bump to trigger retraining when examples or metrics change
   teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model for optimization
   description: 'Classify product review sentiment with confidence.', // optional: task description
@@ -69,7 +70,7 @@ Training requires a metric and at least 10 examples — without it, Praxis gener
 
 Options: `--output, -o <path>` · `--optimizer <ace|gepa|auto>` · `--split <ratio>` · `--force`
 
-Training is skipped if the config is already up to date. If `version` is set in the definition, schema/model/teacher changes without a version bump produce an error — bump the version to retrain.
+Training is skipped if the config is already up to date. If `version` is set in the definition, schema/student/teacher changes without a version bump produce an error — bump the version to retrain.
 
 ### 3. Build
 
@@ -79,7 +80,7 @@ import modelDefinition from './model.definition.js';
 import modelConfig from './model.config.json'; // optional
 
 const request = buildRequest(modelDefinition, { reviewText: '...' }, modelConfig);
-// → { messages, schema, model, metric? }
+// → { messages, schema, student, metric? }
 ```
 
 ### 4. Run
@@ -106,7 +107,7 @@ Return a `Record<string, number>` from `metric` to evaluate on multiple dimensio
 
 ```ts
 export default defineModel({
-  model: 'google/gemini-3-flash-preview',
+  student: 'google/gemini-3-flash-preview',
 
   input: z.object({
     reviewText: z.string().describe('The product review to evaluate'),
@@ -151,7 +152,7 @@ Examples can be an async function instead of a plain array — useful for loadin
 
 ```ts
 export default defineModel({
-  model: 'google/gemini-3-flash-preview',
+  student: 'google/gemini-3-flash-preview',
 
   input: z.object({ text: z.string() }),
   output: z.object({ label: z.enum(['a', 'b', 'c']) }),
@@ -172,18 +173,18 @@ You can also use top-level `await` for simpler cases — no special syntax neede
 
 ## Versioning
 
-The optional `version` field signals when to retrain. Schema, model, and teacher changes are detected automatically, but changes to metric logic or example content are not. Bump the version to trigger retraining:
+The optional `version` field signals when to retrain. Schema, student, and teacher changes are detected automatically, but changes to metric logic or example content are not. Bump the version to trigger retraining:
 
 ```ts
 export default defineModel({
-  model: 'google/gemini-3-flash-preview',
+  student: 'google/gemini-3-flash-preview',
   version: '1.1', // was '1.0' — bumped because metric changed
 
   // ...
 });
 ```
 
-If `version` is set and schema/model/teacher change without a version bump, `praxis train` errors — this prevents accidental drift. Use `--force` to bypass.
+If `version` is set and schema/student/teacher change without a version bump, `praxis train` errors — this prevents accidental drift. Use `--force` to bypass.
 
 ## Examples without expected output
 
@@ -191,7 +192,7 @@ The `output` field on examples is optional. This is useful for metrics that eval
 
 ```ts
 export default defineModel({
-  model: 'google/gemini-3-flash-preview',
+  student: 'google/gemini-3-flash-preview',
 
   input: z.object({ text: z.string() }),
   output: z.object({ summary: z.string() }),
@@ -232,7 +233,8 @@ pnpm --filter @drawcall/example-review-quality dev
 |---------|-------------|
 | `praxis train [-d <path>] [-f]` | Optimize prompts (auto-discovers definition via glob) |
 | `praxis run [-d <path>] [-c <config>]` | Run inference (auto-discovers definition and config) |
-| `praxis validate [-d <path>] [-c <config>]` | Check config matches definition (schema, model, version) |
+| `praxis view [-d <path>] [-p <port>]` | Launch web UI to inspect eval runs and test manually |
+| `praxis validate [-d <path>] [-c <config>]` | Check config matches definition (schema, student, version) |
 
 ## Features
 

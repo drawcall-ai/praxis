@@ -33,8 +33,8 @@ export function detectMismatches(
     mismatches.push({ field: 'output schema', expected: 'definition', actual: 'config (run train)' });
   }
 
-  if (definition.model !== config.model) {
-    mismatches.push({ field: 'model', expected: definition.model, actual: config.model });
+  if (definition.student !== config.student) {
+    mismatches.push({ field: 'student', expected: definition.student, actual: config.student });
   }
 
   const defTeacher = definition.teacher ?? undefined;

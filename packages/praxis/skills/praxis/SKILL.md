@@ -18,7 +18,8 @@ import { z } from 'zod';
 import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
-  model: 'google/gemini-3-flash-preview',
+  name: 'Text Classifier', // optional: human-readable label shown in the web UI
+  student: 'google/gemini-3-flash-preview',
   teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model used during optimization
   description: 'Classify input text into categories.', // optional: task description included in prompt
 
@@ -113,7 +114,7 @@ import modelDefinition from './model.definition.js';
 import modelConfig from './model.config.json'; // optional
 
 const request = buildRequest(modelDefinition, { text: 'Hello' }, modelConfig);
-// → { messages, schema, model, metric? }
+// → { messages, schema, student, metric? }
 ```
 
 ### 4. Run
@@ -157,9 +158,9 @@ const { output } = await generateText({
 
 ## Key types
 
-- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `model`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`.
+- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `name?`, `student`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`.
 - **`ModelConfig`** — The trained `model.config.json`. Optional — everything works without it.
-- **`ModelRequest<O>`** — Returned by `buildRequest()`. Contains `messages` (AI SDK `ModelMessage[]`), `schema`, `model`, and `metric?`.
+- **`ModelRequest<O>`** — Returned by `buildRequest()`. Contains `messages` (AI SDK `ModelMessage[]`), `schema`, `student`, and `metric?`.
 - **`ModelExample<I, O>`** — `{ input: z.infer<Input>, output?: z.infer<Output> }`. The `output` field is optional — omit it when the metric evaluates `modelOutput` without comparing to expected values.
 - **`ModelExamples<I, O>`** — `ModelExample[] | (() => Promise<ModelExample[]>)`. Examples can be a plain array or an async function.
 
@@ -173,7 +174,8 @@ const { output } = await generateText({
 
 1. Ask the user what task they want to solve (classification, extraction, summarization, etc.)
 2. Create a `model.definition.ts` with `export default defineModel({...})`:
-   - Set `model` to an OpenRouter model ID (e.g. `'google/gemini-3-flash-preview'`)
+   - Optionally set `name` — a human-readable label displayed in the web UI (e.g. `'Sentiment Analyzer'`)
+   - Set `student` to an OpenRouter model ID (e.g. `'google/gemini-3-flash-preview'`)
    - Optionally set `version` — bump it when changing examples or metrics to trigger retraining
    - Optionally set `teacher` to a stronger model used during optimization (e.g. `'google/gemini-3.1-pro-preview'`)
    - Optionally set `description` — a short task description included in the prompt

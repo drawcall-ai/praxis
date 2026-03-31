@@ -8,7 +8,7 @@ import { toAxSignature } from '../src/schema.js';
 import type { ModelConfig } from '../src/types.js';
 
 const definition = defineModel({
-  model: 'google/gemini-3-flash-preview',
+  student: 'google/gemini-3-flash-preview',
   description: 'Analyze product reviews to determine sentiment and confidence.',
   input: z.object({
     reviewText: z.string().describe('The text of the product review to analyze'),
@@ -24,7 +24,7 @@ const definition = defineModel({
 
 const trainedConfig: ModelConfig = {
   version: '1.0',
-  model: 'google/gemini-3-flash-preview',
+  student: 'google/gemini-3-flash-preview',
   schema: { input: {}, output: {} },
   optimization: {
     optimizer: 'ace',
@@ -92,20 +92,20 @@ function normalize(msgs: any[]) {
 describe('buildRequest', () => {
   it('uses definition model when no config is provided', () => {
     const req = buildRequest(definition, { reviewText: 'test' });
-    expect(req.model).toBe('google/gemini-3-flash-preview');
+    expect(req.student).toBe('google/gemini-3-flash-preview');
   });
 
   it('uses config model when provided', () => {
     const overrideConfig: ModelConfig = {
       ...trainedConfig,
-      model: 'openai/gpt-4o',
+      student: 'openai/gpt-4o',
     };
     const req = buildRequest(
       definition,
       { reviewText: 'test' },
       overrideConfig,
     );
-    expect(req.model).toBe('openai/gpt-4o');
+    expect(req.student).toBe('openai/gpt-4o');
   });
 });
 
