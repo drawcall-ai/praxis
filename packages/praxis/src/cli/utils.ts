@@ -1,6 +1,7 @@
 import { resolve, dirname } from 'node:path';
 import { glob } from 'tinyglobby';
 import { config as loadEnv } from 'dotenv';
+import chalk from 'chalk';
 import { createServer } from 'vite';
 import { ViteNodeServer } from 'vite-node/server';
 import { ViteNodeRunner } from 'vite-node/client';
@@ -12,11 +13,11 @@ const DEFINITION_GLOBS = ['**/model.definition.ts', '**/model.definition.js'];
 
 // ── Colors ──────────────────────────────────────────────────────────
 
-export const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
-export const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;
-export const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
-export const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
-export const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
+export const dim = chalk.dim;
+export const bold = chalk.bold;
+export const green = chalk.green;
+export const red = chalk.red;
+export const cyan = chalk.cyan;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 

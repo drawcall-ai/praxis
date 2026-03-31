@@ -1,6 +1,8 @@
 import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
+import ora from 'ora';
+import pMap from 'p-map';
 import { AxAIOpenRouter, AxGen, AxACE, AxGEPA } from '@ax-llm/ax';
 import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxOptimizationProgress, AxFieldValue } from '@ax-llm/ax';
 import { toAxSignature, serializeSchema } from '../schema.js';
@@ -21,6 +23,8 @@ import {
 } from './utils.js';
 
 type AxExample = Record<string, AxFieldValue>;
+
+const EVAL_CONCURRENCY = 10;
 
 // ── CLI handler ────────────────────────────────────────────────────────
 
@@ -104,49 +108,7 @@ interface TrainResult {
 
 // ── Progress display ─────────────────────────────────────────────────
 
-const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const BAR_WIDTH = 20;
-
-class Progress {
-  private startTime = Date.now();
-  private frame = 0;
-  private interval: ReturnType<typeof setInterval> | null = null;
-  private line = '';
-
-  spin(label: string) {
-    this.stop();
-    this.line = label;
-    this.interval = setInterval(() => {
-      this.frame = (this.frame + 1) % SPINNER.length;
-      this.write(`  ${SPINNER[this.frame]} ${this.line}  ${dim(this.elapsed())}`);
-    }, 80);
-  }
-
-  set(label: string) {
-    this.line = label;
-  }
-
-  done(msg: string) {
-    this.stop();
-    console.log(`  ${green('✓')} ${msg} ${dim(this.elapsed())}`);
-  }
-
-  stop() {
-    if (this.interval) {
-      clearInterval(this.interval);
-      this.interval = null;
-      process.stdout.write('\r\x1b[K');
-    }
-  }
-
-  private elapsed(): string {
-    return `${((Date.now() - this.startTime) / 1000).toFixed(0)}s`;
-  }
-
-  private write(s: string) {
-    process.stdout.write(`\r\x1b[K${s}`);
-  }
-}
 
 function bar(ratio: number): string {
   const filled = Math.round(ratio * BAR_WIDTH);
@@ -188,7 +150,9 @@ async function train(
   options: Pick<TrainOptions, 'optimizer' | 'split'>,
 ): Promise<TrainResult> {
   const { student } = definition;
-  const progress = new Progress();
+  const startTime = Date.now();
+  const elapsed = () => `${((Date.now() - startTime) / 1000).toFixed(0)}s`;
+  const spinner = ora({ indent: 2 });
 
   if (!Array.isArray(definition.examples)) {
     throw new Error('train() expects resolved examples (plain array). Use resolveExamples() first.');
@@ -245,7 +209,7 @@ async function train(
   const axTestExamples = testExamples.map(toAxExample);
 
   const onProgress = (p: Readonly<AxOptimizationProgress>) => {
-    progress.set(formatProgress(p as AxOptimizationProgress));
+    spinner.text = formatProgress(p as AxOptimizationProgress);
   };
 
   // ── Run optimization ─────────────────────────────────────────────
@@ -254,12 +218,21 @@ async function train(
   let bestScore: number | Record<string, number> = 0;
   let stats: Record<string, unknown> = {};
 
+  // Scale optimizer settings based on dataset size
+  const useMinibatch = trainExamples.length > 50;
+  const optimizerArgs: ConstructorParameters<typeof AxACE>[0] = {
+    studentAI: ai,
+    teacherAI,
+    onProgress,
+    ...(useMinibatch ? { minibatch: true, minibatchSize: Math.min(25, Math.ceil(trainExamples.length / 4)) } : {}),
+  };
+
   if (optimizerType === 'ace') {
     const axMetric = adaptSingleMetric(definition);
 
-    progress.spin('Optimizing');
+    spinner.start('Optimizing');
 
-    const optimizer = new AxACE({ studentAI: ai, teacherAI, onProgress });
+    const optimizer = new AxACE(optimizerArgs);
     const result = await optimizer.compile(program, axTrainExamples, axMetric);
 
     instruction = renderPlaybook(result.playbook);
@@ -267,13 +240,13 @@ async function train(
     bestScore = result.bestScore ?? 0;
     stats = { ...result.stats };
 
-    progress.done(`Optimized — score ${bestScore}`);
+    spinner.succeed(`Optimized — score ${bestScore} ${dim(elapsed())}`);
   } else {
     const axMultiMetric = adaptMultiMetric(definition);
 
-    progress.spin('Optimizing');
+    spinner.start('Optimizing');
 
-    const optimizer = new AxGEPA({ studentAI: ai, teacherAI, onProgress });
+    const optimizer = new AxGEPA(optimizerArgs);
     const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric);
 
     const bestSolution = result.paretoFront?.[0];
@@ -287,7 +260,7 @@ async function train(
     const scoreStr = Object.entries(bestScore as Record<string, number>)
       .map(([k, v]) => `${k}: ${v}`)
       .join(', ');
-    progress.done(`Optimized — ${scoreStr}`);
+    spinner.succeed(`Optimized — ${scoreStr} ${dim(elapsed())}`);
   }
 
   // ── Evaluate on test set ─────────────────────────────────────────
@@ -298,17 +271,17 @@ async function train(
     let completed = 0;
     const total = testExamples.length;
 
-    progress.spin('Evaluating');
+    spinner.start('Evaluating');
 
     const evalResult = await evaluate(ai, program, axTestExamples, definition, isMulti, () => {
       completed++;
-      progress.set(`Evaluating ${dim(`${completed}/${total}`)}`);
+      spinner.text = `Evaluating ${dim(`${completed}/${total}`)}`;
     });
 
     testScore = evalResult.score;
     evalRuns = evalResult.runs;
 
-    progress.done(`Evaluated — test score ${JSON.stringify(testScore)}`);
+    spinner.succeed(`Evaluated — test score ${JSON.stringify(testScore)} ${dim(elapsed())}`);
   }
 
   // ── Build config ─────────────────────────────────────────────────
@@ -474,7 +447,7 @@ async function evaluate(
     const axMultiMetric = adaptMultiMetric(definition);
     const allScores: Record<string, number[]> = {};
 
-    for (const example of testExamples) {
+    await pMap(testExamples, async (example) => {
       try {
         const result = await program.forward(ai, example);
         const prediction = result as Record<string, unknown>;
@@ -486,7 +459,7 @@ async function evaluate(
         }
       } catch { /* skip */ }
       onProgress?.();
-    }
+    }, { concurrency: EVAL_CONCURRENCY });
 
     const score = Object.fromEntries(
       Object.entries(allScores).map(([name, vals]) => [
@@ -499,7 +472,7 @@ async function evaluate(
   const axMetric = adaptSingleMetric(definition);
   const scores: number[] = [];
 
-  for (const example of testExamples) {
+  await pMap(testExamples, async (example) => {
     try {
       const result = await program.forward(ai, example);
       const prediction = result as Record<string, unknown>;
@@ -509,7 +482,7 @@ async function evaluate(
       scores.push(s);
     } catch { /* skip */ }
     onProgress?.();
-  }
+  }, { concurrency: EVAL_CONCURRENCY });
 
   const score = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
   return { score, runs };

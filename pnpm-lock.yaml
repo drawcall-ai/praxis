@@ -52,6 +52,9 @@ importers:
       ai:
         specifier: ^6.0.141
         version: 6.0.141(zod@4.3.6)
+      chalk:
+        specifier: ^5.6.2
+        version: 5.6.2
       commander:
         specifier: ^14.0.3
         version: 14.0.3
@@ -61,6 +64,9 @@ importers:
       ora:
         specifier: ^9.3.0
         version: 9.3.0
+      p-map:
+        specifier: ^7.0.4
+        version: 7.0.4
       tinyglobby:
         specifier: ^0.2.15
         version: 0.2.15
@@ -853,6 +859,10 @@ packages:
   ora@9.3.0:
     resolution: {integrity: sha512-lBX72MWFduWEf7v7uWf5DHp9Jn5BI8bNPGuFgtXMmr2uDz2Gz2749y3am3agSDdkhHPHYmmxEGSKH85ZLGzgXw==}
     engines: {node: '>=20'}
+
+  p-map@7.0.4:
+    resolution: {integrity: sha512-tkAQEw8ysMzmkhgw8k+1U/iPhWNhykKnSk4Rd5zLoPJCuJaGRPo6YposrZgaxHKzDHdDWWZvE/Sk7hsL2X/CpQ==}
+    engines: {node: '>=18'}
 
   pathe@2.0.3:
     resolution: {integrity: sha512-WUjGcAqP1gQacoQe+OBJsFA7Ld4DyXuUIjZ5cc75cLHvJ7dtNsTugphxIADwspS+AraAUePCKrSVtPLFj/F88w==}
@@ -1690,6 +1700,8 @@ snapshots:
       log-symbols: 7.0.1
       stdin-discarder: 0.3.1
       string-width: 8.2.0
+
+  p-map@7.0.4: {}
 
   pathe@2.0.3: {}
 
