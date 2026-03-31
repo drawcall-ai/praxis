@@ -31,6 +31,8 @@ export default defineModel({
     confidence: z.number().describe('Confidence score 0-1'),
   }),
 
+  version: '1.0', // optional: bump to trigger retraining when examples or metrics change
+
   examples: [
     { input: { text: '...' }, output: { label: 'a', confidence: 0.95 } },
     // ... at least 10 examples with { input, output }
@@ -41,6 +43,30 @@ export default defineModel({
     if (!exampleOutput) return null;
     return modelOutput.label === exampleOutput.label ? 1 : 0;
   },
+});
+```
+
+#### Async examples
+
+Examples can be an async function instead of a plain array. Useful for loading from a database or generating synthetic data:
+
+```ts
+export default defineModel({
+  // ...
+  examples: async () => {
+    const rows = await fetchFromAPI('/training-data');
+    return rows.map(r => ({ input: { text: r.text }, output: { label: r.label } }));
+  },
+});
+```
+
+You can also use top-level `await` for simpler cases:
+
+```ts
+const data = await loadFromDB();
+export default defineModel({
+  // ...
+  examples: data.map(r => ({ input: { text: r.text }, output: { label: r.label } })),
 });
 ```
 
@@ -131,10 +157,11 @@ const { output } = await generateText({
 
 ## Key types
 
-- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `model`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`.
+- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `model`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`.
 - **`ModelConfig`** — The trained `model.config.json`. Optional — everything works without it.
 - **`ModelRequest<O>`** — Returned by `buildRequest()`. Contains `messages` (AI SDK `ModelMessage[]`), `schema`, `model`, and `metric?`.
 - **`ModelExample<I, O>`** — `{ input: z.infer<Input>, output?: z.infer<Output> }`. The `output` field is optional — omit it when the metric evaluates `modelOutput` without comparing to expected values.
+- **`ModelExamples<I, O>`** — `ModelExample[] | (() => Promise<ModelExample[]>)`. Examples can be a plain array or an async function.
 
 ## When to help with Praxis
 
@@ -147,6 +174,7 @@ const { output } = await generateText({
 1. Ask the user what task they want to solve (classification, extraction, summarization, etc.)
 2. Create a `model.definition.ts` with `export default defineModel({...})`:
    - Set `model` to an OpenRouter model ID (e.g. `'google/gemini-3-flash-preview'`)
+   - Optionally set `version` — bump it when changing examples or metrics to trigger retraining
    - Optionally set `teacher` to a stronger model used during optimization (e.g. `'google/gemini-3.1-pro-preview'`)
    - Optionally set `description` — a short task description included in the prompt
    - Define `input` and `output` as Zod schemas

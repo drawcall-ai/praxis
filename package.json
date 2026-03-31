@@ -1,7 +1,8 @@
 {
   "private": true,
   "scripts": {
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "praxis": "node packages/praxis/dist/cli.js"
   },
   "devDependencies": {
     "json": "^11.0.0",

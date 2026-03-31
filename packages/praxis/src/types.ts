@@ -20,16 +20,24 @@ export type ModelMetricFn<
   exampleOutput?: z.infer<z.ZodObject<O>>;
 }) => number | Record<string, number> | null | undefined;
 
+export type ModelExamples<
+  I extends z.ZodRawShape = z.ZodRawShape,
+  O extends z.ZodRawShape = z.ZodRawShape,
+> =
+  | ModelExample<I, O>[]
+  | (() => Promise<ModelExample<I, O>[]>);
+
 export interface ModelDefinition<
   I extends z.ZodRawShape = z.ZodRawShape,
   O extends z.ZodRawShape = z.ZodRawShape,
 > {
   model: string;
+  version?: string;
   teacher?: string;
   description?: string;
   input: z.ZodObject<I>;
   output: z.ZodObject<O>;
-  examples: ModelExample<I, O>[];
+  examples: ModelExamples<I, O>;
   metric?: ModelMetricFn<I, O>;
 }
 

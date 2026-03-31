@@ -30,6 +30,7 @@ import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
   model: 'google/gemini-3-flash-preview',
+  version: '1.0', // optional: bump to trigger retraining when examples or metrics change
   teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model for optimization
   description: 'Classify product review sentiment with confidence.', // optional: task description
 
@@ -66,7 +67,9 @@ Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob
 
 Training requires a metric and at least 10 examples — without it, Praxis generates a default instruction from the schema.
 
-Options: `--output, -o <path>` · `--optimizer <ace|gepa|auto>` · `--split <ratio>`
+Options: `--output, -o <path>` · `--optimizer <ace|gepa|auto>` · `--split <ratio>` · `--force`
+
+Training is skipped if the config is already up to date. If `version` is set in the definition, schema/model/teacher changes without a version bump produce an error — bump the version to retrain.
 
 ### 3. Build
 
@@ -142,6 +145,46 @@ const { output, score } = await generateText({
 // score → { quality: 1, sentiment: 1, details: 0 }
 ```
 
+## Async examples
+
+Examples can be an async function instead of a plain array — useful for loading from a database or generating synthetic data:
+
+```ts
+export default defineModel({
+  model: 'google/gemini-3-flash-preview',
+
+  input: z.object({ text: z.string() }),
+  output: z.object({ label: z.enum(['a', 'b', 'c']) }),
+
+  examples: async () => {
+    const rows = await fetchTrainingData();
+    return rows.map(r => ({ input: { text: r.text }, output: { label: r.label } }));
+  },
+
+  metric: ({ modelOutput, exampleOutput }) => {
+    if (!exampleOutput) return null;
+    return modelOutput.label === exampleOutput.label ? 1 : 0;
+  },
+});
+```
+
+You can also use top-level `await` for simpler cases — no special syntax needed.
+
+## Versioning
+
+The optional `version` field signals when to retrain. Schema, model, and teacher changes are detected automatically, but changes to metric logic or example content are not. Bump the version to trigger retraining:
+
+```ts
+export default defineModel({
+  model: 'google/gemini-3-flash-preview',
+  version: '1.1', // was '1.0' — bumped because metric changed
+
+  // ...
+});
+```
+
+If `version` is set and schema/model/teacher change without a version bump, `praxis train` errors — this prevents accidental drift. Use `--force` to bypass.
+
 ## Examples without expected output
 
 The `output` field on examples is optional. This is useful for metrics that evaluate the prediction on its own (e.g. length, format, safety) without comparing to a ground truth:
@@ -187,9 +230,9 @@ pnpm --filter @drawcall/example-review-quality dev
 
 | Command | Description |
 |---------|-------------|
-| `praxis train [-d <path>]` | Optimize prompts (auto-discovers definition via glob) |
+| `praxis train [-d <path>] [-f]` | Optimize prompts (auto-discovers definition via glob) |
 | `praxis run [-d <path>] [-c <config>]` | Run inference (auto-discovers definition and config) |
-| `praxis validate [-d <path>] [-c <config>]` | Check config matches definition schema |
+| `praxis validate [-d <path>] [-c <config>]` | Check config matches definition (schema, model, version) |
 
 ## Features
 

@@ -1,17 +1,100 @@
+import { resolve, dirname } from 'node:path';
+import { readFile, writeFile } from 'node:fs/promises';
+import { config as loadEnv } from 'dotenv';
 import { AxAIOpenRouter, AxGen, AxACE, AxGEPA } from '@ax-llm/ax';
 import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxOptimizationProgress, AxFieldValue } from '@ax-llm/ax';
-
-type AxExample = Record<string, AxFieldValue>;
+import { toAxSignature, serializeSchema } from '../schema.js';
+import { detectMismatches } from '../validate.js';
 import type {
   ModelDefinition,
   ModelExample,
-  ModelMetricFn,
   ModelConfig,
   PraxisDemo,
   PraxisEvalRun,
   TrainOptions,
-} from './types.js';
-import { toAxSignature, serializeSchema } from './schema.js';
+} from '../types.js';
+import {
+  DEFAULT_CONFIG,
+  bold, dim, green,
+  resolveDefinitionPath, requireEnvKey, loadDefinition,
+  validateDefinition, formatZodSchema,
+} from './utils.js';
+
+type AxExample = Record<string, AxFieldValue>;
+
+// ── CLI handler ────────────────────────────────────────────────────────
+
+export async function handleTrain(opts: { definition?: string; output?: string; optimizer: string; split: string; force: boolean }) {
+  const definitionPath = await resolveDefinitionPath(opts.definition);
+  const defDir = dirname(definitionPath);
+  const defaultOutput = resolve(defDir, DEFAULT_CONFIG);
+
+  const options: TrainOptions = {
+    definitionPath,
+    output: opts.output ? resolve(opts.output) : defaultOutput,
+    optimizer: opts.optimizer as TrainOptions['optimizer'],
+    split: parseFloat(opts.split),
+  };
+
+  loadEnv({ path: resolve(dirname(options.definitionPath), '.env') });
+  requireEnvKey();
+
+  const definition = await loadDefinition(options.definitionPath);
+  validateDefinition(definition, true);
+
+  // ── Train guard: decide train / skip / error ─────────────────────
+  if (!opts.force) {
+    let existingConfig: ModelConfig | undefined;
+    try {
+      existingConfig = JSON.parse(await readFile(options.output, 'utf-8'));
+    } catch { /* no config yet */ }
+
+    if (existingConfig) {
+      const mismatches = detectMismatches(definition, existingConfig);
+      const versionMismatch = mismatches.some((m) => m.field === 'version');
+      const otherMismatches = mismatches.filter((m) => m.field !== 'version');
+
+      if (mismatches.length === 0) {
+        console.log(`\n  ${green('✓')} config is up to date — nothing to train\n`);
+        return;
+      }
+
+      if (definition.version != null && otherMismatches.length > 0 && !versionMismatch) {
+        const fields = otherMismatches.map((m) => m.field).join(', ');
+        throw new Error(
+          `${fields} changed but version was not bumped (still ${definition.version}).\n` +
+          `  Update "version" in your definition to trigger retraining.`,
+        );
+      }
+    }
+  }
+
+  // ── Resolve examples ─────────────────────────────────────────────
+  const resolvedExamples = Array.isArray(definition.examples)
+    ? definition.examples
+    : await definition.examples();
+  const resolvedDef = { ...definition, examples: resolvedExamples };
+
+  console.log('');
+  const teacherLabel = definition.teacher ? ` · teacher: ${definition.teacher}` : '';
+  console.log(`  ${bold(definition.model)} ${dim(`${options.optimizer.toUpperCase()} · ${resolvedExamples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
+  console.log('');
+  console.log(formatZodSchema(definition));
+  console.log('');
+
+  const { config, testScore } = await train(resolvedDef, options);
+
+  await writeFile(options.output, JSON.stringify(config, null, 2));
+
+  console.log('');
+  console.log(`  ${green('✓')} ${bold(options.output)}`);
+  if (testScore !== null) {
+    console.log(`  ${green('✓')} test score ${bold(JSON.stringify(testScore))}`);
+  }
+  console.log('');
+}
+
+// ── Training pipeline ──────────────────────────────────────────────────
 
 interface TrainResult {
   config: ModelConfig;
@@ -20,9 +103,6 @@ interface TrainResult {
 }
 
 // ── Progress display ─────────────────────────────────────────────────
-
-const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
-const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const BAR_WIDTH = 20;
@@ -85,8 +165,8 @@ function formatProgress(p: AxOptimizationProgress): string {
  * Probe the metric function with a sample example to determine if it returns
  * a single number or a Record<string, number> (multi-metric).
  */
-function probeMetricType(def: ModelDefinition): 'single' | 'multi' {
-  const example = def.examples[0];
+function probeMetricType(def: ModelDefinition, examples: ModelExample[]): 'single' | 'multi' {
+  const example = examples[0];
   if (!example || !def.metric) return 'single';
 
   const ctx = {
@@ -103,12 +183,17 @@ function probeMetricType(def: ModelDefinition): 'single' | 'multi' {
 /**
  * Run the full training pipeline.
  */
-export async function train(
+async function train(
   definition: ModelDefinition,
   options: Pick<TrainOptions, 'optimizer' | 'split'>,
 ): Promise<TrainResult> {
-  const { examples, model } = definition;
+  const { model } = definition;
   const progress = new Progress();
+
+  if (!Array.isArray(definition.examples)) {
+    throw new Error('train() expects resolved examples (plain array). Use resolveExamples() first.');
+  }
+  const examples = definition.examples;
 
   if (examples.length < 10) {
     throw new Error(`At least 10 examples required, got ${examples.length}`);
@@ -119,9 +204,9 @@ export async function train(
   }
 
   // Validate metric against a sample example to catch null returns early
-  validateMetric(definition);
+  validateMetric(definition, examples);
 
-  const metricType = probeMetricType(definition);
+  const metricType = probeMetricType(definition, examples);
   const isMulti = metricType === 'multi';
 
   let optimizerType = options.optimizer;
@@ -229,7 +314,7 @@ export async function train(
   // ── Build config ─────────────────────────────────────────────────
   return {
     config: {
-      version: '1.0',
+      version: definition.version ?? '1.0',
       model,
       ...(definition.teacher ? { teacher: definition.teacher } : {}),
       schema: serializeSchema(definition),
@@ -249,8 +334,8 @@ export async function train(
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function validateMetric(def: ModelDefinition): void {
-  const example = def.examples[0];
+function validateMetric(def: ModelDefinition, examples: ModelExample[]): void {
+  const example = examples[0];
   if (!example || !def.metric) return;
 
   const ctx = {
