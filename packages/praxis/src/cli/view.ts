@@ -419,14 +419,15 @@ function buildHTML(): string {
   .eval-table td {
     padding: 12px 16px;
     border-bottom: 1px solid var(--border);
-    vertical-align: top;
+    vertical-align: middle;
     font-family: var(--mono);
     font-size: 12px;
   }
 
   .eval-table tr:last-child td { border-bottom: none; }
 
-  .eval-table tr:hover td { background: var(--surface); }
+  .eval-table tbody tr { cursor: pointer; transition: background 0.1s; }
+  .eval-table tbody tr:hover td { background: var(--surface-2); }
 
   .badge {
     display: inline-block;
@@ -441,30 +442,150 @@ function buildHTML(): string {
   .badge.fail { background: var(--red-dim); color: var(--red); }
   .badge.partial { background: #422006; color: var(--orange); }
 
-  .cell-value {
-    max-width: 280px;
+  .cell-truncate {
+    max-width: 320px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .cell-value:hover {
-    white-space: normal;
-    word-break: break-word;
+  /* Detail modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    z-index: 1000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 0.15s;
   }
 
-  .try-btn {
-    background: none;
+  .modal-overlay.visible { opacity: 1; }
+
+  .modal {
+    background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 12px;
+    width: 640px;
+    max-width: calc(100vw - 48px);
+    max-height: calc(100vh - 96px);
+    overflow-y: auto;
+    transform: translateY(8px);
+    transition: transform 0.15s;
+  }
+
+  .modal-overlay.visible .modal { transform: translateY(0); }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .modal-header h3 {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
     color: var(--text-muted);
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 4px;
+    border-radius: 4px;
+    transition: color 0.15s;
+  }
+
+  .modal-close:hover { color: var(--text); }
+
+  .modal-body { padding: 24px; }
+
+  .modal-section {
+    margin-bottom: 24px;
+  }
+
+  .modal-section:last-child { margin-bottom: 0; }
+
+  .modal-section-title {
     font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 10px;
+  }
+
+  .modal-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .modal-field-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+
+  .modal-field-value {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--text);
+  }
+
+  .modal-diff {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+  }
+
+  .modal-diff-col h4 {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 8px;
+  }
+
+  .modal-diff-col .modal-field-value.match { border-color: #14532d; }
+  .modal-diff-col .modal-field-value.mismatch { border-color: #450a0a; }
+
+  .modal-footer {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .modal-footer .try-btn {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-dim);
+    cursor: pointer;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-family: inherit;
     transition: all 0.15s;
   }
 
-  .try-btn:hover {
+  .modal-footer .try-btn:hover {
     color: var(--text);
     border-color: var(--border-light);
   }
@@ -658,6 +779,17 @@ function buildHTML(): string {
     <div id="eval-content"></div>
   </div>
 
+  <div class="modal-overlay" id="eval-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Eval Run</h3>
+        <button class="modal-close" id="modal-close"><i data-lucide="x"></i></button>
+      </div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-footer" id="modal-footer"></div>
+    </div>
+  </div>
+
   <div class="tab-content" id="tab-prompt">
     <div class="instruction" id="instruction"></div>
   </div>
@@ -740,16 +872,36 @@ function buildHTML(): string {
       addStat('graduation-cap', 'Teacher', shortTeacher);
     }
 
-    // Trained-only: score
+    // Trained-only: scores + optimizer
     if (trained) {
+      // Train score
       if (typeof opt.bestScore === 'number') {
         const cls = opt.bestScore >= 0.8 ? 'good' : opt.bestScore >= 0.5 ? 'warn' : 'bad';
-        addStat('target', 'Score', opt.bestScore.toFixed(2), cls);
+        addStat('target', 'Train', opt.bestScore.toFixed(2), cls);
       } else if (typeof opt.bestScore === 'object') {
         const vals = Object.values(opt.bestScore);
         const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
         const cls = avg >= 0.8 ? 'good' : avg >= 0.5 ? 'warn' : 'bad';
-        addStat('target', 'Score', avg.toFixed(2), cls);
+        addStat('target', 'Train', avg.toFixed(2), cls);
+      }
+
+      // Test score (computed from eval runs)
+      const evalRuns = opt.evalRuns || [];
+      if (evalRuns.length > 0) {
+        const firstScore = evalRuns[0].score;
+        let testAvg;
+        if (typeof firstScore === 'number') {
+          const scores = evalRuns.map(r => r.score);
+          testAvg = scores.reduce((a, b) => a + b, 0) / scores.length;
+        } else {
+          const perRun = evalRuns.map(r => {
+            const vals = Object.values(r.score);
+            return vals.reduce((a, b) => a + b, 0) / vals.length;
+          });
+          testAvg = perRun.reduce((a, b) => a + b, 0) / perRun.length;
+        }
+        const cls = testAvg >= 0.8 ? 'good' : testAvg >= 0.5 ? 'warn' : 'bad';
+        addStat('flask-conical', 'Test', testAvg.toFixed(2), cls);
       }
 
       addStat('settings', 'Optimizer', opt.optimizer.toUpperCase());
@@ -782,15 +934,21 @@ function buildHTML(): string {
     const evalEl = document.getElementById('eval-content');
     const runs = opt?.evalRuns || [];
 
+    // Store runs globally for modal access
+    window.__evalRuns = runs;
+
     if (runs.length === 0) {
       evalEl.innerHTML = '<div class="empty-state"><p>No eval runs recorded yet.</p><p style="color:var(--text-muted)">Train the model to capture per-example evaluation traces.</p></div>';
     } else {
-      const outputKeys = Object.keys(runs[0].expectedOutput || runs[0].modelOutput || {});
       const inputKeys = Object.keys(runs[0].input || {});
+      // Pick first input key as summary column
+      const summaryKey = inputKeys[0] || 'input';
 
-      let html = '<table class="eval-table"><thead><tr><th>#</th>';
-      for (const k of inputKeys) html += '<th>' + k + '</th>';
-      html += '<th>Expected</th><th>Predicted</th><th>Score</th><th></th></tr></thead><tbody>';
+      let html = '<table class="eval-table"><thead><tr>';
+      html += '<th>#</th>';
+      html += '<th>' + summaryKey + '</th>';
+      html += '<th>Score</th>';
+      html += '</tr></thead><tbody>';
 
       runs.forEach((run, i) => {
         const score = run.score;
@@ -805,21 +963,24 @@ function buildHTML(): string {
           badgeCls = avg >= 1 ? 'pass' : avg > 0 ? 'partial' : 'fail';
         }
 
-        const expected = outputKeys.map(k => run.expectedOutput[k]).join(', ');
-        const predicted = outputKeys.map(k => run.modelOutput[k]).join(', ');
-        const inputVals = inputKeys.map(k => run.input[k]);
+        const summaryVal = String(run.input[summaryKey] ?? '');
 
-        html += '<tr><td>' + (i+1) + '</td>';
-        for (const v of inputVals) html += '<td><div class="cell-value" title="' + String(v).replace(/"/g,'&quot;') + '">' + String(v) + '</div></td>';
-        html += '<td><div class="cell-value">' + expected + '</div></td>';
-        html += '<td><div class="cell-value">' + predicted + '</div></td>';
+        html += '<tr data-run-idx="' + i + '">';
+        html += '<td>' + (i+1) + '</td>';
+        html += '<td><div class="cell-truncate">' + summaryVal.replace(/</g,'&lt;') + '</div></td>';
         html += '<td><span class="badge ' + badgeCls + '">' + scoreStr + '</span></td>';
-        html += '<td><button class="try-btn" title="Try in Playground" data-input="' + encodeURIComponent(JSON.stringify(run.input)) + '"><i data-lucide="play"></i></button></td>';
         html += '</tr>';
       });
 
       html += '</tbody></table>';
       evalEl.innerHTML = html;
+
+      // Attach click handlers to each row
+      evalEl.querySelectorAll('tr[data-run-idx]').forEach(row => {
+        row.addEventListener('click', () => {
+          openModal(parseInt(row.dataset.runIdx, 10));
+        });
+      });
     }
 
     // Playground tab
@@ -903,22 +1064,96 @@ function buildHTML(): string {
     lucide.createIcons();
   }
 
-  // Try in Playground — fill form and switch tab
-  document.addEventListener('click', (e) => {
-    const btn = e.target.closest('.try-btn[data-input]');
-    if (!btn) return;
-    const input = JSON.parse(decodeURIComponent(btn.dataset.input));
-    const form = document.getElementById('run-form');
-    for (const [name, value] of Object.entries(input)) {
-      const el = form.querySelector('[name="' + name + '"]');
-      if (el) el.value = String(value);
+  // Eval detail modal
+  const modalOverlay = document.getElementById('eval-modal');
+  const modalBody = document.getElementById('modal-body');
+  const modalFooter = document.getElementById('modal-footer');
+  const modalTitle = document.getElementById('modal-title');
+
+  function openModal(idx) {
+    const run = window.__evalRuns[idx];
+    if (!run) return;
+
+    modalTitle.textContent = 'Eval Run #' + (idx + 1);
+
+    const fmt = (v) => {
+      if (v == null) return '';
+      if (typeof v === 'object') return JSON.stringify(v, null, 2);
+      return String(v);
+    };
+
+    let html = '';
+
+    // Input section
+    html += '<div class="modal-section"><div class="modal-section-title">Input</div><div class="modal-fields">';
+    for (const [k, v] of Object.entries(run.input)) {
+      html += '<div><div class="modal-field-label">' + k + '</div><div class="modal-field-value">' + fmt(v).replace(/</g,'&lt;') + '</div></div>';
     }
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-    document.querySelector('[data-tab="playground"]').classList.add('active');
-    document.getElementById('tab-playground').classList.add('active');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    html += '</div></div>';
+
+    // Output comparison
+    const outputKeys = Object.keys(run.expectedOutput || run.modelOutput || {});
+    html += '<div class="modal-section"><div class="modal-section-title">Output</div>';
+    for (const k of outputKeys) {
+      const exp = fmt(run.expectedOutput?.[k]);
+      const pred = fmt(run.modelOutput?.[k]);
+      const match = exp === pred;
+      html += '<div style="margin-bottom:12px"><div class="modal-field-label">' + k + '</div>';
+      html += '<div class="modal-diff">';
+      html += '<div class="modal-diff-col"><h4>Expected</h4><div class="modal-field-value ' + (match ? 'match' : '') + '">' + exp.replace(/</g,'&lt;') + '</div></div>';
+      html += '<div class="modal-diff-col"><h4>Predicted</h4><div class="modal-field-value ' + (match ? 'match' : 'mismatch') + '">' + pred.replace(/</g,'&lt;') + '</div></div>';
+      html += '</div></div>';
+    }
+    html += '</div>';
+
+    // Score
+    const score = run.score;
+    let scoreStr;
+    if (typeof score === 'number') {
+      scoreStr = score.toFixed(2);
+    } else {
+      scoreStr = Object.entries(score).map(([k,v]) => k + ': ' + v.toFixed(2)).join(', ');
+    }
+    html += '<div class="modal-section"><div class="modal-section-title">Score</div>';
+    html += '<div class="modal-field-value">' + scoreStr + '</div></div>';
+
+    modalBody.innerHTML = html;
+
+    // Footer with Try in Playground button
+    modalFooter.innerHTML = '<button class="try-btn" id="modal-try-btn"><i data-lucide="play"></i> Try in Playground</button>';
+    document.getElementById('modal-try-btn').addEventListener('click', () => {
+      const form = document.getElementById('run-form');
+      for (const [name, value] of Object.entries(run.input)) {
+        const el = form.querySelector('[name="' + name + '"]');
+        if (el) el.value = String(value);
+      }
+      closeModal();
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+      document.querySelector('[data-tab="playground"]').classList.add('active');
+      document.getElementById('tab-playground').classList.add('active');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    modalOverlay.style.display = 'flex';
+    requestAnimationFrame(() => { modalOverlay.classList.add('visible'); });
+    lucide.createIcons({ nodes: [modalOverlay] });
+  }
+
+  function closeModal() {
+    modalOverlay.classList.remove('visible');
+    setTimeout(() => { modalOverlay.style.display = 'none'; }, 150);
+  }
+
+  modalOverlay.addEventListener('click', (e) => {
+    if (e.target === modalOverlay) closeModal();
   });
+  document.getElementById('modal-close').addEventListener('click', closeModal);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+  });
+
+  // Row click handlers are attached in renderModel after table is built
 
   // Section tab switching
   document.querySelectorAll('.tab').forEach(tab => {

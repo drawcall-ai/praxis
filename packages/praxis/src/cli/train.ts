@@ -237,6 +237,11 @@ async function train(
       demos = extractDemos(result.demos, definition);
       bestScore = result.bestScore ?? 0;
       stats = { ...result.stats };
+
+      // Apply all optimized state (instruction, demos, modelConfig) to the program for eval
+      if (result.optimizedProgram) {
+        program.applyOptimization(result.optimizedProgram);
+      }
     } else {
       const axMultiMetric = adaptMultiMetric(definition);
       const optimizer = new AxGEPA(optimizerArgs);
@@ -251,6 +256,11 @@ async function train(
         : extractDemos(result.demos, definition);
       bestScore = bestSolution?.scores ?? {};
       stats = { ...result.stats };
+
+      // Apply all optimized state (instruction, instructionMap, demos, modelConfig) for eval
+      if (result.optimizedProgram) {
+        program.applyOptimization(result.optimizedProgram);
+      }
     }
   } finally {
     clearInterval(progressTimer);
