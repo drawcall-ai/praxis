@@ -230,7 +230,11 @@ async function train(
     if (optimizerType === 'ace') {
       const axMetric = adaptSingleMetric(definition);
       const optimizer = new AxACE(optimizerArgs);
-      const result = await optimizer.compile(program, axTrainExamples, axMetric);
+      const result = await optimizer.compile(program, axTrainExamples, axMetric, {
+        maxIterations: 20,
+        earlyStoppingPatience: 5,
+        overrideTargetScore: 1.0,
+      });
 
       instruction = renderPlaybook(result.playbook);
       demos = extractDemos(result.demos, definition);
@@ -239,7 +243,11 @@ async function train(
     } else {
       const axMultiMetric = adaptMultiMetric(definition);
       const optimizer = new AxGEPA(optimizerArgs);
-      const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric);
+      const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric, {
+        maxIterations: 20,
+        earlyStoppingPatience: 5,
+        overrideTargetScore: 1.0,
+      });
 
       const bestSolution = result.paretoFront?.[0];
       instruction = result.optimizedProgram?.instruction ?? '';
