@@ -193,16 +193,19 @@ async function train(
     }
   };
 
+  const totalRoundsEstimate = axTrainExamples.length;
+
   const progressTimer = setInterval(() => {
-    if (lastRound) {
-      const { round, totalRounds, bestScore: best } = lastRound;
-      const pct = totalRounds > 0 ? round / totalRounds : 0;
-      const ms = Date.now() - startTime;
-      const eta = round > 0 ? Math.ceil((ms / round) * (totalRounds - round) / 1000) : 0;
-      writeProgress(`Optimizing ${progressBar(pct)} ${dim(`${round}/${totalRounds}`)} best: ${best.toFixed(2)} ${dim(`~${eta}s left`)}`);
-    } else {
-      writeProgress(`Optimizing… ${elapsed()}`);
-    }
+    const round = lastRound?.round ?? 0;
+    const totalRounds = lastRound?.totalRounds ?? totalRoundsEstimate;
+    const best = lastRound?.bestScore;
+    const pct = totalRounds > 0 ? round / totalRounds : 0;
+    const scoreStr = best != null ? ` best: ${best.toFixed(2)}` : '';
+    const ms = Date.now() - startTime;
+    const etaStr = round > 0
+      ? dim(` ~${Math.ceil((ms / round) * (totalRounds - round) / 1000)}s left`)
+      : dim(` ${elapsed()}`);
+    writeProgress(`Optimizing ${progressBar(pct)} ${dim(`${round}/${totalRounds}`)}${scoreStr}${etaStr}`);
   }, 1000);
   progressTimer.unref();
 
