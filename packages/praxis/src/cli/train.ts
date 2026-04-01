@@ -193,7 +193,8 @@ async function train(
     }
   };
 
-  const totalRoundsEstimate = axTrainExamples.length;
+  const maxIterations = 20;
+  const totalRoundsEstimate = Math.min(axTrainExamples.length, maxIterations);
 
   const progressTimer = setInterval(() => {
     const round = lastRound?.round ?? 0;
@@ -231,7 +232,7 @@ async function train(
       const axMetric = adaptSingleMetric(definition);
       const optimizer = new AxACE(optimizerArgs);
       const result = await optimizer.compile(program, axTrainExamples, axMetric, {
-        maxIterations: 20,
+        maxIterations,
         earlyStoppingPatience: 5,
         overrideTargetScore: 1.0,
       });
@@ -244,7 +245,7 @@ async function train(
       const axMultiMetric = adaptMultiMetric(definition);
       const optimizer = new AxGEPA(optimizerArgs);
       const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric, {
-        maxIterations: 20,
+        maxIterations,
         earlyStoppingPatience: 5,
         overrideTargetScore: 1.0,
       });
