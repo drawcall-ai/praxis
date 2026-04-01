@@ -1,0 +1,161 @@
+{
+  "version": "1.0",
+  "student": "google/gemini-3-flash-preview",
+  "schema": {
+    "input": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "reviewText": {
+          "type": "string",
+          "description": "The product review to evaluate"
+        }
+      },
+      "required": [
+        "reviewText"
+      ],
+      "additionalProperties": false
+    },
+    "output": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "quality": {
+          "type": "string",
+          "enum": [
+            "helpful",
+            "unhelpful"
+          ],
+          "description": "Whether the review is helpful to other buyers"
+        },
+        "sentiment": {
+          "type": "string",
+          "enum": [
+            "positive",
+            "negative",
+            "neutral"
+          ],
+          "description": "The overall sentiment of the review"
+        },
+        "hasSpecificDetails": {
+          "type": "boolean",
+          "description": "Whether the review mentions specific product details"
+        }
+      },
+      "required": [
+        "quality",
+        "sentiment",
+        "hasSpecificDetails"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "optimization": {
+    "optimizer": "gepa",
+    "instruction": "",
+    "demos": [],
+    "bestScore": {},
+    "evalRuns": [
+      {
+        "input": {
+          "reviewText": "Fits true to size. The waterproof coating held up in heavy rain for 2 hours."
+        },
+        "expectedOutput": {
+          "quality": "helpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": true
+        },
+        "modelOutput": {
+          "quality": "helpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": true
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "Returned after 3 days. The zipper broke on first use and the stitching came apart at the seams."
+        },
+        "expectedOutput": {
+          "quality": "helpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": true
+        },
+        "modelOutput": {
+          "quality": "helpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": true
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "DO NOT BUY THIS PRODUCT"
+        },
+        "expectedOutput": {
+          "quality": "unhelpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": false
+        },
+        "modelOutput": {
+          "quality": "unhelpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": false
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "Perfect gift for my mom. The ceramic finish looks premium and the 2-year warranty is a plus."
+        },
+        "expectedOutput": {
+          "quality": "helpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": true
+        },
+        "modelOutput": {
+          "quality": "helpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": true
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
+      }
+    ],
+    "stats": {
+      "totalCalls": 0,
+      "successfulDemos": 0,
+      "estimatedTokenUsage": 0,
+      "earlyStopped": false,
+      "resourceUsage": {
+        "totalTokens": 0,
+        "totalTime": 2319,
+        "avgLatencyPerEval": 0,
+        "costByModel": {}
+      },
+      "convergenceInfo": {
+        "converged": true,
+        "finalImprovement": 0,
+        "stagnationRounds": 0,
+        "convergenceThreshold": 0
+      },
+      "bestScore": 0,
+      "bestConfiguration": {}
+    }
+  }
+}

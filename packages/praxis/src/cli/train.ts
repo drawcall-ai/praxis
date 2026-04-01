@@ -1,10 +1,9 @@
 import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
 import { config as loadEnv } from 'dotenv';
-import ora from 'ora';
 import pMap from 'p-map';
 import { AxAIOpenRouter, AxGen, AxACE, AxGEPA } from '@ax-llm/ax';
-import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxOptimizationProgress, AxFieldValue } from '@ax-llm/ax';
+import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxFieldValue, AxOptimizerLoggerData } from '@ax-llm/ax';
 import { toAxSignature, serializeSchema } from '../schema.js';
 import { detectMismatches } from '../validate.js';
 import type {
@@ -25,6 +24,22 @@ import {
 type AxExample = Record<string, AxFieldValue>;
 
 const EVAL_CONCURRENCY = 10;
+const BAR_WIDTH = 20;
+
+// ── Progress helpers ──────────────────────────────────────────────────
+
+function progressBar(ratio: number): string {
+  const filled = Math.round(ratio * BAR_WIDTH);
+  return `${'█'.repeat(filled)}${dim('░'.repeat(BAR_WIDTH - filled))}`;
+}
+
+function writeProgress(msg: string) {
+  process.stdout.write(`\r\x1b[K  ${msg}`);
+}
+
+function writeDone(msg: string) {
+  process.stdout.write(`\r\x1b[K  ${green('✓')} ${msg}\n`);
+}
 
 // ── CLI handler ────────────────────────────────────────────────────────
 
@@ -106,53 +121,13 @@ interface TrainResult {
   evalRuns: PraxisEvalRun[];
 }
 
-// ── Progress display ─────────────────────────────────────────────────
-
-const BAR_WIDTH = 20;
-
-function bar(ratio: number): string {
-  const filled = Math.round(ratio * BAR_WIDTH);
-  const empty = BAR_WIDTH - filled;
-  return `${'█'.repeat(filled)}${dim('░'.repeat(empty))}`;
-}
-
-function formatProgress(p: AxOptimizationProgress): string {
-  const pct = p.totalRounds > 0 ? p.round / p.totalRounds : 0;
-  const score = typeof p.bestScore === 'number' ? p.bestScore.toFixed(2) : '?';
-  const converging = p.convergenceInfo?.isConverging ? dim(' converging') : '';
-  return `${bar(pct)} ${dim(`${p.round}/${p.totalRounds}`)} best: ${score}${converging}`;
-}
-
-/**
- * Probe the metric function with a sample example to determine if it returns
- * a single number or a Record<string, number> (multi-metric).
- */
-function probeMetricType(def: ModelDefinition, examples: ModelExample[]): 'single' | 'multi' {
-  const example = examples[0];
-  if (!example || !def.metric) return 'single';
-
-  const ctx = {
-    input: example.input as Record<string, unknown>,
-    modelOutput: (example.output ?? {}) as Record<string, unknown>,
-    exampleOutput: example.output as Record<string, unknown> | undefined,
-  };
-
-  const result = def.metric(ctx);
-  if (result != null && typeof result === 'object') return 'multi';
-  return 'single';
-}
-
-/**
- * Run the full training pipeline.
- */
 async function train(
   definition: ModelDefinition,
   options: Pick<TrainOptions, 'optimizer' | 'split'>,
 ): Promise<TrainResult> {
   const { student } = definition;
   const startTime = Date.now();
-  const elapsed = () => `${((Date.now() - startTime) / 1000).toFixed(0)}s`;
-  const spinner = ora({ indent: 2 });
+  const elapsed = () => dim(`${((Date.now() - startTime) / 1000).toFixed(0)}s`);
 
   if (!Array.isArray(definition.examples)) {
     throw new Error('train() expects resolved examples (plain array). Use resolveExamples() first.');
@@ -167,7 +142,6 @@ async function train(
     throw new Error('Definition must export a "metric" function');
   }
 
-  // Validate metric against a sample example to catch null returns early
   validateMetric(definition, examples);
 
   const metricType = probeMetricType(definition, examples);
@@ -208,9 +182,29 @@ async function train(
   const axTrainExamples = trainExamples.map(toAxExample);
   const axTestExamples = testExamples.map(toAxExample);
 
-  const onProgress = (p: Readonly<AxOptimizationProgress>) => {
-    spinner.text = formatProgress(p as AxOptimizationProgress);
+  // ── Progress tracking ───────────────────────────────────────────
+  // ACE's compile() only emits progress via optimizerLogger (not onProgress).
+  // We store the latest round info and render it from a single interval.
+  let lastRound: { round: number; totalRounds: number; bestScore: number } | undefined;
+
+  const optimizerLogger = (data: AxOptimizerLoggerData) => {
+    if (data.name === 'RoundProgress') {
+      lastRound = data.value;
+    }
   };
+
+  const progressTimer = setInterval(() => {
+    if (lastRound) {
+      const { round, totalRounds, bestScore: best } = lastRound;
+      const pct = totalRounds > 0 ? round / totalRounds : 0;
+      const ms = Date.now() - startTime;
+      const eta = round > 0 ? Math.ceil((ms / round) * (totalRounds - round) / 1000) : 0;
+      writeProgress(`Optimizing ${progressBar(pct)} ${dim(`${round}/${totalRounds}`)} best: ${best.toFixed(2)} ${dim(`~${eta}s left`)}`);
+    } else {
+      writeProgress(`Optimizing… ${elapsed()}`);
+    }
+  }, 1000);
+  progressTimer.unref();
 
   // ── Run optimization ─────────────────────────────────────────────
   let instruction = '';
@@ -218,50 +212,48 @@ async function train(
   let bestScore: number | Record<string, number> = 0;
   let stats: Record<string, unknown> = {};
 
-  // Scale optimizer settings based on dataset size
   const useMinibatch = trainExamples.length > 50;
   const optimizerArgs: ConstructorParameters<typeof AxACE>[0] = {
     studentAI: ai,
     teacherAI,
-    onProgress,
+    optimizerLogger,
+    debugOptimizer: true,
     ...(useMinibatch ? { minibatch: true, minibatchSize: Math.min(25, Math.ceil(trainExamples.length / 4)) } : {}),
   };
 
-  if (optimizerType === 'ace') {
-    const axMetric = adaptSingleMetric(definition);
+  writeProgress('Optimizing…');
 
-    spinner.start('Optimizing');
+  try {
+    if (optimizerType === 'ace') {
+      const axMetric = adaptSingleMetric(definition);
+      const optimizer = new AxACE(optimizerArgs);
+      const result = await optimizer.compile(program, axTrainExamples, axMetric);
 
-    const optimizer = new AxACE(optimizerArgs);
-    const result = await optimizer.compile(program, axTrainExamples, axMetric);
+      instruction = renderPlaybook(result.playbook);
+      demos = extractDemos(result.demos, definition);
+      bestScore = result.bestScore ?? 0;
+      stats = { ...result.stats };
+    } else {
+      const axMultiMetric = adaptMultiMetric(definition);
+      const optimizer = new AxGEPA(optimizerArgs);
+      const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric);
 
-    instruction = renderPlaybook(result.playbook);
-    demos = extractDemos(result.demos, definition);
-    bestScore = result.bestScore ?? 0;
-    stats = { ...result.stats };
-
-    spinner.succeed(`Optimized — score ${bestScore} ${dim(elapsed())}`);
-  } else {
-    const axMultiMetric = adaptMultiMetric(definition);
-
-    spinner.start('Optimizing');
-
-    const optimizer = new AxGEPA(optimizerArgs);
-    const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric);
-
-    const bestSolution = result.paretoFront?.[0];
-    instruction = result.optimizedProgram?.instruction ?? '';
-    demos = bestSolution
-      ? extractDemos(bestSolution.demos, definition)
-      : extractDemos(result.demos, definition);
-    bestScore = bestSolution?.scores ?? {};
-    stats = { ...result.stats };
-
-    const scoreStr = Object.entries(bestScore as Record<string, number>)
-      .map(([k, v]) => `${k}: ${v}`)
-      .join(', ');
-    spinner.succeed(`Optimized — ${scoreStr} ${dim(elapsed())}`);
+      const bestSolution = result.paretoFront?.[0];
+      instruction = result.optimizedProgram?.instruction ?? '';
+      demos = bestSolution
+        ? extractDemos(bestSolution.demos, definition)
+        : extractDemos(result.demos, definition);
+      bestScore = bestSolution?.scores ?? {};
+      stats = { ...result.stats };
+    }
+  } finally {
+    clearInterval(progressTimer);
   }
+
+  const scoreLabel = typeof bestScore === 'number'
+    ? `score ${bestScore}`
+    : Object.entries(bestScore).map(([k, v]) => `${k}: ${v}`).join(', ');
+  writeDone(`Optimized — ${scoreLabel} ${elapsed()}`);
 
   // ── Evaluate on test set ─────────────────────────────────────────
   let testScore: number | Record<string, number> | null = null;
@@ -271,17 +263,14 @@ async function train(
     let completed = 0;
     const total = testExamples.length;
 
-    spinner.start('Evaluating');
-
     const evalResult = await evaluate(ai, program, axTestExamples, definition, isMulti, () => {
       completed++;
-      spinner.text = `Evaluating ${dim(`${completed}/${total}`)}`;
+      writeProgress(`Evaluating ${dim(`${completed}/${total}`)}`);
     });
 
     testScore = evalResult.score;
     evalRuns = evalResult.runs;
-
-    spinner.succeed(`Evaluated — test score ${JSON.stringify(testScore)} ${dim(elapsed())}`);
+    writeDone(`Evaluated — test score ${JSON.stringify(testScore)} ${elapsed()}`);
   }
 
   // ── Build config ─────────────────────────────────────────────────
@@ -307,17 +296,25 @@ async function train(
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function validateMetric(def: ModelDefinition, examples: ModelExample[]): void {
+function probeMetricType(def: ModelDefinition, examples: ModelExample[]): 'single' | 'multi' {
   const example = examples[0];
-  if (!example || !def.metric) return;
-
-  const ctx = {
+  if (!example || !def.metric) return 'single';
+  const result = def.metric({
     input: example.input as Record<string, unknown>,
     modelOutput: (example.output ?? {}) as Record<string, unknown>,
     exampleOutput: example.output as Record<string, unknown> | undefined,
-  };
+  });
+  return result != null && typeof result === 'object' ? 'multi' : 'single';
+}
 
-  const result = def.metric(ctx);
+function validateMetric(def: ModelDefinition, examples: ModelExample[]): void {
+  const example = examples[0];
+  if (!example || !def.metric) return;
+  const result = def.metric({
+    input: example.input as Record<string, unknown>,
+    modelOutput: (example.output ?? {}) as Record<string, unknown>,
+    exampleOutput: example.output as Record<string, unknown> | undefined,
+  });
   if (result == null) {
     throw new Error(
       'Metric returned null/undefined for a training example. ' +
@@ -327,10 +324,6 @@ function validateMetric(def: ModelDefinition, examples: ModelExample[]): void {
   }
 }
 
-/**
- * Wrap the user's metric as an AxMetricFn (single number).
- * If the metric returns a Record, averages the values.
- */
 function adaptSingleMetric(def: ModelDefinition): AxMetricFn {
   const inputKeys = Object.keys(def.input.shape);
   const outputKeys = Object.keys(def.output.shape);
@@ -351,16 +344,11 @@ function adaptSingleMetric(def: ModelDefinition): AxMetricFn {
     const result = metricFn({ input, modelOutput, exampleOutput });
     if (result == null) return 0;
     if (typeof result === 'number') return result;
-    // Record — average all values
     const vals = Object.values(result);
     return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
   };
 }
 
-/**
- * Wrap the user's metric as an AxMultiMetricFn.
- * The metric must return a Record<string, number>.
- */
 function adaptMultiMetric(def: ModelDefinition): AxMultiMetricFn {
   const inputKeys = Object.keys(def.input.shape);
   const outputKeys = Object.keys(def.output.shape);

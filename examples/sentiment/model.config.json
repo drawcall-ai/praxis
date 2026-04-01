@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "model": "google/gemini-3-flash-preview",
+  "student": "google/gemini-3-flash-preview",
   "teacher": "google/gemini-3.1-pro-preview",
   "schema": {
     "input": {
@@ -44,9 +44,67 @@
   },
   "optimization": {
     "optimizer": "ace",
-    "instruction": "## Sentiment Analysis Guidelines\n- Explicit negative adjectives (e.g., 'Terrible') combined with descriptions of immediate product failure (e.g., 'broke after one day') are highly reliable indicators of negative sentiment and warrant maximum confidence scores.\n- Phrases like 'works fine', 'nothing special', 'okay for the price', and 'does what it says, no more no less' are strong indicators of neutral sentiment, as they convey that basic requirements are met without enthusiasm or disappointment.\n- Phrases explicitly advising against a product or service (e.g., 'would not recommend') are unambiguous indicators of negative sentiment and warrant high confidence scores.\n- Explicit positive language and phrases (e.g., 'Amazing', 'fast', 'love', 'Best purchase ever', 'truly excellent') and indicators of repeat purchases (e.g., 'keep coming back to buy more') are highly reliable indicators of positive sentiment and warrant maximum confidence scores.",
+    "instruction": "## Sentiment Classification Guidelines\n- - Clear, unambiguous language expressing dissatisfaction (e.g., \"terrible\", \"broke\", \"would not recommend\", \"waste of money\") should result in a high-confidence negative sentiment classification.\n- - Clear, unambiguous language expressing satisfaction or praise (e.g., \"amazing\", \"fast\") should result in a high-confidence positive sentiment classification.\n- - Text that only states objective facts without evaluative language (e.g., \"It is a product. It exists.\") should be classified as neutral.\n- - Mild or lukewarm evaluative language (e.g., \"works fine\", \"nothing special\") expresses a degree of satisfaction or dissatisfaction and should be classified as positive or negative, not neutral. Neutral sentiment is strictly reserved for objective, factual statements.",
     "demos": [],
     "bestScore": 1,
+    "evalRuns": [
+      {
+        "input": {
+          "reviewText": "Five stars! Exceeded my expectations."
+        },
+        "expectedOutput": {
+          "sentiment": "positive",
+          "confidence": 0.97
+        },
+        "modelOutput": {
+          "sentiment": "positive",
+          "confidence": 1
+        },
+        "score": 1
+      },
+      {
+        "input": {
+          "reviewText": "Arrived damaged and support was unhelpful."
+        },
+        "expectedOutput": {
+          "sentiment": "negative",
+          "confidence": 0.91
+        },
+        "modelOutput": {
+          "sentiment": "negative",
+          "confidence": 0.98
+        },
+        "score": 1
+      },
+      {
+        "input": {
+          "reviewText": "The product is okay for the price."
+        },
+        "expectedOutput": {
+          "sentiment": "neutral",
+          "confidence": 0.75
+        },
+        "modelOutput": {
+          "sentiment": "neutral",
+          "confidence": 0.95
+        },
+        "score": 1
+      },
+      {
+        "input": {
+          "reviewText": "Does what it says, no more no less."
+        },
+        "expectedOutput": {
+          "sentiment": "neutral",
+          "confidence": 0.7
+        },
+        "modelOutput": {
+          "sentiment": "neutral",
+          "confidence": 0.95
+        },
+        "score": 1
+      }
+    ],
     "stats": {
       "totalCalls": 8,
       "successfulDemos": 0,
@@ -54,7 +112,7 @@
       "earlyStopped": false,
       "resourceUsage": {
         "totalTokens": 0,
-        "totalTime": 220164,
+        "totalTime": 179968,
         "avgLatencyPerEval": 0,
         "costByModel": {}
       },
