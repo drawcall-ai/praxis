@@ -193,12 +193,9 @@ async function train(
     }
   };
 
-  const maxIterations = 20;
-  const totalRoundsEstimate = Math.min(axTrainExamples.length, maxIterations);
-
   const progressTimer = setInterval(() => {
     const round = lastRound?.round ?? 0;
-    const totalRounds = lastRound?.totalRounds ?? totalRoundsEstimate;
+    const totalRounds = lastRound?.totalRounds ?? axTrainExamples.length;
     const best = lastRound?.bestScore;
     const pct = totalRounds > 0 ? round / totalRounds : 0;
     const scoreStr = best != null ? ` best: ${best.toFixed(2)}` : '';
@@ -232,9 +229,8 @@ async function train(
       const axMetric = adaptSingleMetric(definition);
       const optimizer = new AxACE(optimizerArgs);
       const result = await optimizer.compile(program, axTrainExamples, axMetric, {
-        maxIterations,
         earlyStoppingPatience: 5,
-        overrideTargetScore: 1.0,
+        aceOptions: { maxEpochs: 1 },
       });
 
       instruction = renderPlaybook(result.playbook);
@@ -245,9 +241,7 @@ async function train(
       const axMultiMetric = adaptMultiMetric(definition);
       const optimizer = new AxGEPA(optimizerArgs);
       const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric, {
-        maxIterations,
         earlyStoppingPatience: 5,
-        overrideTargetScore: 1.0,
       });
 
       const bestSolution = result.paretoFront?.[0];
