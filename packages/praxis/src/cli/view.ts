@@ -469,12 +469,13 @@ function buildHTML(): string {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
-    width: 640px;
-    max-width: calc(100vw - 48px);
-    max-height: calc(100vh - 96px);
+    width: calc(100vw - 48px);
+    height: calc(100vh - 48px);
     overflow-y: auto;
     transform: translateY(8px);
     transition: transform 0.15s;
+    display: flex;
+    flex-direction: column;
   }
 
   .modal-overlay.visible .modal { transform: translateY(0); }
@@ -504,7 +505,7 @@ function buildHTML(): string {
 
   .modal-close:hover { color: var(--text); }
 
-  .modal-body { padding: 24px; }
+  .modal-body { padding: 24px; flex: 1; overflow-y: auto; }
 
   .modal-section {
     margin-bottom: 24px;
@@ -522,8 +523,8 @@ function buildHTML(): string {
   }
 
   .modal-fields {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 12px;
   }
 
@@ -1091,20 +1092,23 @@ function buildHTML(): string {
     }
     html += '</div></div>';
 
-    // Output comparison
-    const outputKeys = Object.keys(run.expectedOutput || run.modelOutput || {});
-    html += '<div class="modal-section"><div class="modal-section-title">Output</div>';
-    for (const k of outputKeys) {
-      const exp = fmt(run.expectedOutput?.[k]);
-      const pred = fmt(run.modelOutput?.[k]);
-      const match = exp === pred;
-      html += '<div style="margin-bottom:12px"><div class="modal-field-label">' + k + '</div>';
-      html += '<div class="modal-diff">';
-      html += '<div class="modal-diff-col"><h4>Expected</h4><div class="modal-field-value ' + (match ? 'match' : '') + '">' + exp.replace(/</g,'&lt;') + '</div></div>';
-      html += '<div class="modal-diff-col"><h4>Predicted</h4><div class="modal-field-value ' + (match ? 'match' : 'mismatch') + '">' + pred.replace(/</g,'&lt;') + '</div></div>';
+    // Expected Output section
+    if (run.expectedOutput && Object.keys(run.expectedOutput).length > 0) {
+      html += '<div class="modal-section"><div class="modal-section-title">Expected Output</div><div class="modal-fields">';
+      for (const [k, v] of Object.entries(run.expectedOutput)) {
+        html += '<div><div class="modal-field-label">' + k + '</div><div class="modal-field-value">' + fmt(v).replace(/</g,'&lt;') + '</div></div>';
+      }
       html += '</div></div>';
     }
-    html += '</div>';
+
+    // Model Output section
+    if (run.modelOutput && Object.keys(run.modelOutput).length > 0) {
+      html += '<div class="modal-section"><div class="modal-section-title">Model Output</div><div class="modal-fields">';
+      for (const [k, v] of Object.entries(run.modelOutput)) {
+        html += '<div><div class="modal-field-label">' + k + '</div><div class="modal-field-value">' + fmt(v).replace(/</g,'&lt;') + '</div></div>';
+      }
+      html += '</div></div>';
+    }
 
     // Score
     const score = run.score;
@@ -1114,7 +1118,7 @@ function buildHTML(): string {
     } else {
       scoreStr = Object.entries(score).map(([k,v]) => k + ': ' + v.toFixed(2)).join(', ');
     }
-    html += '<div class="modal-section"><div class="modal-section-title">Score</div>';
+    html += '<div class="modal-section" style="margin-top:24px"><div class="modal-section-title">Score</div>';
     html += '<div class="modal-field-value">' + scoreStr + '</div></div>';
 
     modalBody.innerHTML = html;
