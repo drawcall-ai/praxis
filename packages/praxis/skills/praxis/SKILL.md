@@ -18,10 +18,11 @@ import { z } from 'zod';
 import { defineModel } from '@drawcall/praxis';
 
 export default defineModel({
-  name: 'Text Classifier', // optional: human-readable label shown in the web UI
+  name: 'Text Classifier',
   student: 'google/gemini-3-flash-preview',
-  teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model used as the optimizer agent
-  description: 'Classify input text into categories.', // optional: task description included in prompt
+  teacher: 'google/gemini-3.1-pro-preview',
+  description: 'Classify input text into categories.',
+  version: '1.0',
 
   input: z.object({
     text: z.string().describe('The input text'),
@@ -32,8 +33,6 @@ export default defineModel({
     confidence: z.number().describe('Confidence score 0-1'),
   }),
 
-  version: '1.0', // optional: bump to trigger retraining when examples or metrics change
-
   examples: [
     { input: { text: '...' }, output: { label: 'a', confidence: 0.95 } },
     // ... at least 10 examples with { input, output }
@@ -43,8 +42,39 @@ export default defineModel({
     if (!exampleOutput) return null;
     return { accuracy: modelOutput.label === exampleOutput.label ? 1 : 0 };
   },
+
+  // Training options (all optional)
+  metricWeights: { accuracy: 0.7, confidence: 0.3 },
+  split: [0.7, 0.15, 0.15],
+  targetScore: 0.9,
+  maxIterations: 5,
+  maxTestsPerIteration: 100,
 });
 ```
+
+#### Definition fields
+
+**Required:**
+- `student` — OpenRouter model ID (e.g. `'google/gemini-3-flash-preview'`)
+- `input` — Zod schema for the input
+- `output` — Zod schema for the output
+- `examples` — Array of `{ input, output? }` (at least 10 for training). Can also be an async function or a lazy provider.
+
+**Optional — model:**
+- `name` — Human-readable label shown in the web UI
+- `teacher` — Stronger model used as the optimizer agent (e.g. `'google/gemini-3.1-pro-preview'`)
+- `description` — Short task description included in the prompt
+- `version` — Bump to trigger retraining when examples or metrics change
+
+**Optional — metrics:**
+- `metric` — Scoring function. Return `Record<string, number>` (e.g. `{ accuracy: 1 }`) or `null`. Required for training.
+- `metricWeights` — Control importance of different metrics (equal weights if omitted). A built-in `tokenEfficiency` metric (default weight 0.1) penalizes reasoning cost overhead — set `metricWeights: { tokenEfficiency: 0 }` to disable it.
+
+**Optional — training:**
+- `split` — Train/val/test split as `[train, val, test]` (default: `[0.7, 0.15, 0.15]`). Must sum to 1.0.
+- `targetScore` — Target combined score on validation set. When set, the optimizer iterates up to `maxIterations` times, continuing the agent conversation when the val score doesn't meet the target.
+- `maxIterations` — Max optimization iterations (default: `5`). Only takes effect when `targetScore` is set.
+- `maxTestsPerIteration` — Max example test runs the optimizer agent can use per iteration (default: `100`). Each example ID passed to `test_examples` costs one run. Limits agent steps to `2 × maxTestsPerIteration`.
 
 #### Async examples
 
@@ -70,26 +100,6 @@ export default defineModel({
 });
 ```
 
-#### Multiple metrics
-
-Return a `Record<string, number>` from `metric` to evaluate on multiple dimensions. Use optional `metricWeights` to control importance:
-
-```ts
-export default defineModel({
-  // ... input, output, examples ...
-
-  metric: ({ modelOutput, exampleOutput }) => {
-    if (!exampleOutput) return null;
-    return {
-      accuracy: modelOutput.label === exampleOutput.label ? 1 : 0,
-      confidence: Math.abs(modelOutput.confidence - exampleOutput.confidence) < 0.1 ? 1 : 0,
-    };
-  },
-
-  metricWeights: { accuracy: 0.7, confidence: 0.3 }, // optional: equal weights if omitted
-});
-```
-
 ### 2. Train (optional)
 
 ```bash
@@ -98,12 +108,12 @@ npx praxis train
 
 Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob. Runs an agentic optimizer that diagnoses failures, inspects model reasoning, and writes targeted prompt improvements. Outputs `model.config.json` next to the definition file.
 
-Options:
-- `--output, -o <path>` — output file (default: `model.config.json` next to the definition)
-- `--split <ratio>` — train/test split (default: 0.7)
-- `--force` — skip version/schema guard and force retraining
+CLI options:
+- `-d, --definition <path>` — definition file (default: auto-discover)
+- `-o, --output <path>` — output file (default: `model.config.json` next to the definition)
+- `-f, --force` — skip version/schema guard and force retraining
 
-You can also pass an explicit definition path: `npx praxis train -d path/to/model.definition.ts`
+All training parameters (split, targetScore, maxIterations, metricWeights) are configured in the definition, not the CLI.
 
 Training requires a metric and at least 10 examples. Without training, the model works using a default instruction generated from the schema.
 
@@ -157,9 +167,17 @@ const { output } = await generateText({
 
 `score` is `Record<string, number> | null` — always a per-metric record.
 
+### 6. Check
+
+```bash
+npx praxis check
+```
+
+Verifies the config matches the definition (schema, student, teacher, version, metricWeights). Suggests running `npx praxis train` to fix mismatches.
+
 ## Key types
 
-- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `name?`, `student`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`, `metricWeights?`.
+- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `name?`, `student`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`, `metricWeights?`, `split?`, `targetScore?`, `maxIterations?`, `maxTestsPerIteration?`.
 - **`ModelConfig`** — The trained `model.config.json`. Optional — everything works without it.
 - **`ModelRequest<O>`** — Returned by `buildRequest()`. Contains `messages` (AI SDK `ModelMessage[]`), `schema`, `student`, and `metric?`.
 - **`ModelExample<I, O>`** — `{ input: z.infer<Input>, output?: z.infer<Output> }`. The `output` field is optional — omit it when the metric evaluates `modelOutput` without comparing to expected values.
@@ -175,18 +193,16 @@ const { output } = await generateText({
 
 1. Ask the user what task they want to solve (classification, extraction, summarization, etc.)
 2. Create a `model.definition.ts` with `export default defineModel({...})`:
-   - Optionally set `name` — a human-readable label displayed in the web UI (e.g. `'Sentiment Analyzer'`)
-   - Set `student` to an OpenRouter model ID (e.g. `'google/gemini-3-flash-preview'`)
-   - Optionally set `version` — bump it when changing examples or metrics to trigger retraining
-   - Optionally set `teacher` to a stronger model used as the optimizer agent (e.g. `'google/gemini-3.1-pro-preview'`)
-   - Optionally set `description` — a short task description included in the prompt
+   - Set `student` to an OpenRouter model ID
    - Define `input` and `output` as Zod schemas
-   - Write 10+ examples with `{ input: {...}, output: {...} }` structure (`output` is optional when the metric doesn't need expected values)
-   - Add a `metric` function — always return `Record<string, number>` (e.g. `{ accuracy: 1 }`) or `null`
-   - Optionally add `metricWeights` to control importance of different metrics
+   - Write 10+ examples with `{ input, output }` structure
+   - Add a `metric` function returning `Record<string, number>` or `null`
+   - Optionally set `name`, `teacher`, `description`, `version`
+   - Optionally set `metricWeights`, `split`, `targetScore`, `maxIterations`, `maxTestsPerIteration`
    - If the metric returns `null` during training, Praxis throws an error — ensure examples have `output` if the metric compares against it
-3. Tell them to set `OPENROUTER_KEY` in `.env` then run `npx praxis train` (auto-discovers the definition; optional)
+3. Tell them to set `OPENROUTER_KEY` in `.env` then run `npx praxis train`
 4. Show them how to use `buildRequest` / `generateText` in code, or `npx praxis run` from CLI
+5. Use `npx praxis check` to verify the config matches the definition
 
 ## Requirements
 

@@ -68,19 +68,33 @@ Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob
 
 Training requires a metric and at least 10 examples — without it, Praxis generates a default instruction from the schema.
 
-Options: `--output, -o <path>` · `--split <ratio>` · `--force`
+CLI options: `--output, -o <path>` · `--force`
+
+Training parameters are configured in the definition:
+
+```ts
+export default defineModel({
+  // ...
+  split: [0.7, 0.15, 0.15], // train/val/test split (default: [0.7, 0.15, 0.15])
+  targetScore: 0.9,    // target combined score on validation set (enables iterative optimization)
+  maxIterations: 5,    // max optimization iterations when target not met (default: 5)
+  maxTestsPerIteration: 100, // max example test runs the optimizer can use per iteration (default: 100)
+});
+```
 
 Training is skipped if the config is already up to date. If `version` is set in the definition, schema/student/teacher changes without a version bump produce an error — bump the version to retrain.
 
 #### How training works
 
-The optimizer is an agentic loop powered by the teacher model (or student if no teacher is set). It:
+The optimizer splits examples into **train / val / test** sets and runs an agentic loop powered by the teacher model (or student if no teacher is set). It:
 
-1. Evaluates the default prompt on a held-out test set to establish a baseline
+1. Evaluates the default prompt on the validation set to establish a baseline
 2. Tests subsets of training examples, inspects failing inputs and the target model's reasoning
 3. Writes improved prompts that address the specific failure patterns it observes
-4. Iterates until satisfied, then confirms on the full test set
-5. Accepts the new prompt only if the combined score improves over baseline
+4. After each iteration, evaluates on the validation set — if `targetScore` is set and not met, continues the conversation with the agent for up to `maxIterations` rounds
+5. Selects the best prompt by validation score, then confirms on the held-out test set
+
+A built-in `tokenEfficiency` metric (default weight 0.1) penalizes inference cost overhead — it compares the irreducible cost (user input + output) against actual cost (system prompt + thinking + output). The optimizer starts with maximum reasoning effort (`xhigh`) and finds the best quality/cost tradeoff.
 
 The agent has full creative freedom over the system prompt — it can include step-by-step algorithms, few-shot examples, lookup tables, edge case warnings, and more.
 
@@ -246,12 +260,14 @@ pnpm --filter @drawcall/example-review-quality dev
 | `praxis train [-d <path>] [-f]` | Optimize prompts (auto-discovers definition via glob) |
 | `praxis run [-d <path>] [-c <config>]` | Run inference (auto-discovers definition and config) |
 | `praxis view [-d <path>] [-p <port>]` | Launch web UI to inspect eval runs and test manually |
-| `praxis validate [-d <path>] [-c <config>]` | Check config matches definition (schema, student, version) |
+| `praxis check [-d <path>] [-c <config>]` | Check config matches definition (schema, student, version, weights) |
 
 ## Features
 
 - **Schema-driven** — Define inputs and outputs with Zod, get type-safe results
 - **Agentic optimization** — An AI agent diagnoses failures, inspects model reasoning, and writes targeted prompt improvements
+- **Iterative optimization** — Set `targetScore` in the definition and the optimizer iterates up to N times, using a validation set for checkpoint selection
+- **Token efficiency** — Built-in metric penalizes reasoning cost overhead, pushing the optimizer to find the best quality/cost tradeoff
 - **Portable output** — `model.config.json` works with any LLM provider via OpenRouter
 - **Works without training** — Definitions alone produce results; training makes them better
 - **Multi-metric with weights** — Return a `Record<string, number>` with optional `metricWeights` for weighted optimization

@@ -39,53 +39,21 @@ export function validateSchema(
 
 /**
  * Format the input/output schema for inclusion in a system prompt.
- * Produces a human-readable description of each field.
+ * Uses JSON Schema (via Zod v4) for precise, LLM-native type descriptions.
  */
 export function formatSchemaForPrompt(source: SchemaSource): string {
-  const lines: string[] = [];
+  const inputSchema = z.toJSONSchema(source.input);
+  const outputSchema = z.toJSONSchema(source.output);
 
-  lines.push('Input:');
-  for (const [key, zodType] of Object.entries(source.input.shape)) {
-    lines.push(`  ${key}: ${describeZodType(zodType as z.ZodTypeAny)}`);
-  }
-
-  lines.push('');
-  lines.push('Output (respond as JSON):');
-  for (const [key, zodType] of Object.entries(source.output.shape)) {
-    lines.push(`  ${key}: ${describeZodType(zodType as z.ZodTypeAny)}`);
-  }
-
-  return lines.join('\n');
-}
-
-interface ZodDef {
-  type: string;
-  innerType?: z.ZodTypeAny;
-  entries?: Record<string, string>;
-}
-
-function describeZodType(zodType: z.ZodTypeAny): string {
-  const description = zodType.description;
-  const def = (zodType as unknown as { def: ZodDef }).def;
-  const defType = def.type;
-
-  if (defType === 'optional' || defType === 'nullable' || defType === 'default') {
-    return describeZodType(def.innerType as z.ZodTypeAny);
-  }
-
-  let typeStr: string;
-  if (defType === 'enum') {
-    const values = Object.keys(def.entries as Record<string, string>);
-    typeStr = values.map((v) => `"${v}"`).join(' | ');
-  } else if (defType === 'number') {
-    typeStr = 'number';
-  } else if (defType === 'boolean') {
-    typeStr = 'boolean';
-  } else if (defType === 'array') {
-    typeStr = 'array';
-  } else {
-    typeStr = 'string';
-  }
-
-  return description ? `${typeStr} — ${description}` : typeStr;
+  return [
+    'Input schema:',
+    '```json',
+    JSON.stringify(inputSchema, null, 2),
+    '```',
+    '',
+    'Output schema (respond as JSON matching this schema):',
+    '```json',
+    JSON.stringify(outputSchema, null, 2),
+    '```',
+  ].join('\n');
 }

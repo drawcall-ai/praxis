@@ -17,7 +17,6 @@ program
   .description('Optimize prompts from a definition file (auto-discovers via glob)')
   .option('-d, --definition <path>', 'definition file (default: auto-discover)')
   .option('-o, --output <path>', 'config output path (default: model.config.json next to definition)')
-  .option('--split <ratio>', 'train/test split', '0.7')
   .option('-f, --force', 'skip version/schema guard and force retraining')
   .action(handleTrain);
 
@@ -38,7 +37,7 @@ program
   .action(handleView);
 
 program
-  .command('validate')
+  .command('check')
   .description('Check that the config matches the definition schema')
   .option('-d, --definition <path>', 'definition file (default: auto-discover)')
   .option('-c, --config <path>', 'config file (default: model.config.json next to definition)')

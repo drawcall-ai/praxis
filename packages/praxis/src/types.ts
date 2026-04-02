@@ -50,6 +50,10 @@ export interface ModelDefinition<
   examples: ModelExamples<I, O>;
   metric?: ModelMetricFn<I, O>;
   metricWeights?: Record<string, number>;
+  split?: [number, number, number];
+  targetScore?: number;
+  maxIterations?: number;
+  maxTestsPerIteration?: number;
 }
 
 // ── Config (model.config.json) ──────────────────────────────────────
@@ -78,6 +82,7 @@ export interface ModelConfig {
     temperature?: number;
     reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     bestScore: Record<string, number>;
+    metricWeights?: Record<string, number>;
     evalRuns?: PraxisEvalRun[];
     stats?: Record<string, unknown>;
   };
@@ -100,7 +105,6 @@ export interface ModelRequest<O extends z.ZodRawShape = z.ZodRawShape> {
 export interface TrainOptions {
   definitionPath: string;
   output: string;
-  split: number;
 }
 
 // ── Scoring ─────────────────────────────────────────────────────────

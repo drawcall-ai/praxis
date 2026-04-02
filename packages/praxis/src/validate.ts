@@ -55,5 +55,11 @@ export function detectMismatches(
     });
   }
 
+  const defWeights = JSON.stringify(definition.metricWeights ?? {});
+  const cfgWeights = JSON.stringify(config.optimization?.metricWeights ?? {});
+  if (defWeights !== cfgWeights) {
+    mismatches.push({ field: 'metricWeights', expected: defWeights, actual: cfgWeights });
+  }
+
   return mismatches;
 }
