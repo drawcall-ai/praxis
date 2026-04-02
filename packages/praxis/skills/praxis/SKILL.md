@@ -5,7 +5,7 @@ description: Define, train, and run optimized LLM prompt models using Praxis. Us
 
 # Praxis — Prompt Model Framework
 
-You are an expert at building optimized LLM prompt models using Praxis. Praxis uses automatic prompt optimization (DSPy-style) to turn a schema + examples into a high-quality, tested `model.config.json`.
+You are an expert at building optimized LLM prompt models using Praxis. Praxis uses an agentic optimizer to turn a schema + examples into a high-quality, tested `model.config.json`.
 
 ## Workflow: Define → Train (optional) → Build → Run
 
@@ -20,7 +20,7 @@ import { defineModel } from '@drawcall/praxis';
 export default defineModel({
   name: 'Text Classifier', // optional: human-readable label shown in the web UI
   student: 'google/gemini-3-flash-preview',
-  teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model used during optimization
+  teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model used as the optimizer agent
   description: 'Classify input text into categories.', // optional: task description included in prompt
 
   input: z.object({
@@ -39,10 +39,9 @@ export default defineModel({
     // ... at least 10 examples with { input, output }
   ],
 
-  // Single metric
   metric: ({ modelOutput, exampleOutput }) => {
     if (!exampleOutput) return null;
-    return modelOutput.label === exampleOutput.label ? 1 : 0;
+    return { accuracy: modelOutput.label === exampleOutput.label ? 1 : 0 };
   },
 });
 ```
@@ -73,7 +72,7 @@ export default defineModel({
 
 #### Multiple metrics
 
-Return a `Record<string, number>` from `metric` for multi-objective optimization. Praxis auto-selects the GEPA optimizer:
+Return a `Record<string, number>` from `metric` to evaluate on multiple dimensions. Use optional `metricWeights` to control importance:
 
 ```ts
 export default defineModel({
@@ -86,6 +85,8 @@ export default defineModel({
       confidence: Math.abs(modelOutput.confidence - exampleOutput.confidence) < 0.1 ? 1 : 0,
     };
   },
+
+  metricWeights: { accuracy: 0.7, confidence: 0.3 }, // optional: equal weights if omitted
 });
 ```
 
@@ -95,12 +96,12 @@ export default defineModel({
 npx praxis train
 ```
 
-Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob. Runs automatic prompt optimization and writes `model.config.json` next to the definition file.
+Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob. Runs an agentic optimizer that diagnoses failures, inspects model reasoning, and writes targeted prompt improvements. Outputs `model.config.json` next to the definition file.
 
 Options:
 - `--output, -o <path>` — output file (default: `model.config.json` next to the definition)
-- `--optimizer <ace|gepa|auto>` — optimizer type (default: auto)
 - `--split <ratio>` — train/test split (default: 0.7)
+- `--force` — skip version/schema guard and force retraining
 
 You can also pass an explicit definition path: `npx praxis train -d path/to/model.definition.ts`
 
@@ -154,11 +155,11 @@ const { output } = await generateText({
 });
 ```
 
-`score` is `number | null` for single metric, `Record<string, number>` for multiple metrics.
+`score` is `Record<string, number> | null` — always a per-metric record.
 
 ## Key types
 
-- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `name?`, `student`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`.
+- **`ModelDefinition<I, O>`** — Returned by `defineModel()`. Fields: `name?`, `student`, `version?`, `teacher?`, `description?`, `input`, `output`, `examples`, `metric?`, `metricWeights?`.
 - **`ModelConfig`** — The trained `model.config.json`. Optional — everything works without it.
 - **`ModelRequest<O>`** — Returned by `buildRequest()`. Contains `messages` (AI SDK `ModelMessage[]`), `schema`, `student`, and `metric?`.
 - **`ModelExample<I, O>`** — `{ input: z.infer<Input>, output?: z.infer<Output> }`. The `output` field is optional — omit it when the metric evaluates `modelOutput` without comparing to expected values.
@@ -177,11 +178,12 @@ const { output } = await generateText({
    - Optionally set `name` — a human-readable label displayed in the web UI (e.g. `'Sentiment Analyzer'`)
    - Set `student` to an OpenRouter model ID (e.g. `'google/gemini-3-flash-preview'`)
    - Optionally set `version` — bump it when changing examples or metrics to trigger retraining
-   - Optionally set `teacher` to a stronger model used during optimization (e.g. `'google/gemini-3.1-pro-preview'`)
+   - Optionally set `teacher` to a stronger model used as the optimizer agent (e.g. `'google/gemini-3.1-pro-preview'`)
    - Optionally set `description` — a short task description included in the prompt
    - Define `input` and `output` as Zod schemas
    - Write 10+ examples with `{ input: {...}, output: {...} }` structure (`output` is optional when the metric doesn't need expected values)
-   - Add a `metric` function (return a `number` for single, `Record<string, number>` for multi)
+   - Add a `metric` function — always return `Record<string, number>` (e.g. `{ accuracy: 1 }`) or `null`
+   - Optionally add `metricWeights` to control importance of different metrics
    - If the metric returns `null` during training, Praxis throws an error — ensure examples have `output` if the metric compares against it
 3. Tell them to set `OPENROUTER_KEY` in `.env` then run `npx praxis train` (auto-discovers the definition; optional)
 4. Show them how to use `buildRequest` / `generateText` in code, or `npx praxis run` from CLI

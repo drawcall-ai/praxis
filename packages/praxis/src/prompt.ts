@@ -1,44 +1,43 @@
 import { z } from 'zod';
-import { AxSignature, AxPromptTemplate } from '@ax-llm/ax';
-import type { AxFieldValue } from '@ax-llm/ax';
 import type { ModelMessage } from 'ai';
 import type { ModelDefinition, ModelConfig, ModelRequest, JsonSchema } from './types.js';
-import { toAxSignature } from './schema.js';
+import { formatSchemaForPrompt } from './schema.js';
+
+/**
+ * Build the default system prompt from a model definition.
+ * This is the starting point for the agentic optimizer.
+ */
+export function buildDefaultSystemPrompt<I extends z.ZodRawShape, O extends z.ZodRawShape>(definition: ModelDefinition<I, O>): string {
+  const parts: string[] = [];
+
+  if (definition.description) {
+    parts.push(definition.description);
+  }
+
+  parts.push(formatSchemaForPrompt(definition));
+
+  return parts.join('\n\n');
+}
 
 /**
  * Build a request from a definition and input.
- * Uses ax's AxPromptTemplate.render() — the same renderer ax uses internally
- * during training — to produce the exact prompt with 100% parity.
+ * If a trained config is provided, its instruction replaces the default system prompt.
  */
 export function buildRequest<I extends z.ZodRawShape, O extends z.ZodRawShape>(
   definition: ModelDefinition<I, O>,
   input: z.infer<z.ZodObject<I>>,
   config?: ModelConfig,
 ): ModelRequest<O> {
-  const sig = AxSignature.create(toAxSignature(definition));
-  if (definition.description) sig.setDescription(definition.description);
+  const system = config?.optimization.instruction || buildDefaultSystemPrompt(definition);
 
-  const template = new AxPromptTemplate(sig);
-  const demos = config?.optimization.demos.map(
-    (d) => ({ ...d.input, ...d.output }) as Record<string, AxFieldValue>,
-  );
+  const userContent = Object.entries(input as Record<string, unknown>)
+    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+    .join('\n');
 
-  const rendered = template.render(input as Record<string, AxFieldValue>, { demos });
-
-  const messages: ModelMessage[] = [];
-  for (const msg of rendered) {
-    if (msg.role === 'system') {
-      messages.push({ role: 'system', content: msg.content as string });
-    } else if (msg.role === 'assistant') {
-      messages.push({ role: 'assistant', content: msg.content as string });
-    } else if (msg.role === 'user') {
-      const content = msg.content;
-      messages.push({
-        role: 'user',
-        content: typeof content === 'string' ? content : JSON.stringify(content),
-      });
-    }
-  }
+  const messages: ModelMessage[] = [
+    { role: 'system', content: system },
+    { role: 'user', content: userContent },
+  ];
 
   return {
     messages,

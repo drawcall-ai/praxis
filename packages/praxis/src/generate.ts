@@ -15,7 +15,7 @@ export type GenerateOptions = Omit<
 export interface GenerateResult<O extends z.ZodRawShape = z.ZodRawShape> {
   output: z.infer<z.ZodObject<O>>;
   request: ModelRequest<O>;
-  score?: number | Record<string, number> | null;
+  score?: Record<string, number> | null;
 }
 
 /**

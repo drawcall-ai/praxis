@@ -51,71 +51,13 @@
     }
   },
   "optimization": {
-    "optimizer": "gepa",
-    "instruction": "",
-    "demos": [],
-    "bestScore": {},
+    "instruction": "# Role\nYou are an expert consumer product review analyst. Your task is to evaluate product reviews for quality, sentiment, and the presence of specific details.\n\n# Evaluation Criteria\n\n## 1. Quality (`quality`)\n- **helpful**: The review provides useful information that helps a potential buyer make an informed decision. This includes product specifications, performance data, specific pros/cons, or detailed accounts of usage.\n- **unhelpful**: The review is too vague, brief, or purely emotional without providing context or facts. Commands like \"Do not buy\" or simple adjectives like \"Great\" without explanation are unhelpful.\n\n## 2. Sentiment (`sentiment`)\n- **positive**: The overall tone is favorable, or the pros significantly outweigh the cons.\n- **negative**: The overall tone is unfavorable, or the cons significantly outweigh the pros.\n- **neutral**: The review is indifferent, purely factual, or contains a balanced mix of positive and negative points (e.g., \"The screen is great, but the battery is bad\").\n\n## 3. Specific Details (`hasSpecificDetails`)\n- **true**: The review mentions specific product features (e.g., \"zipper\", \"1080p\", \"waterproof coating\"), technical specifications, quantity/time measurements (e.g., \"8 hours\", \"3 days\"), or specific failure modes.\n- **false**: The review uses only generic language (e.g., \"this product\", \"it\", \"everything\") and lacks detail.\n\n# Output Format\nRespond ONLY with a JSON object in the following format:\n{\n  \"quality\": \"helpful\" | \"unhelpful\",\n  \"sentiment\": \"positive\" | \"negative\" | \"neutral\",\n  \"hasSpecificDetails\": boolean\n}\n\n# Reasoning Steps\n1. Scan the text for specific nouns, measurements, or unique attributes related to the product or experience.\n2. Determine if these details provide enough context to assist a buyer.\n3. Weigh the positive and negative descriptors. If they are balanced or the review is just a neutral statement of facts, label as \"neutral\".\n4. Construct the final JSON output.",
+    "bestScore": {
+      "quality": 1,
+      "sentiment": 1,
+      "details": 1
+    },
     "evalRuns": [
-      {
-        "input": {
-          "reviewText": "Fits true to size. The waterproof coating held up in heavy rain for 2 hours."
-        },
-        "expectedOutput": {
-          "quality": "helpful",
-          "sentiment": "positive",
-          "hasSpecificDetails": true
-        },
-        "modelOutput": {
-          "quality": "helpful",
-          "sentiment": "positive",
-          "hasSpecificDetails": true
-        },
-        "score": {
-          "quality": 1,
-          "sentiment": 1,
-          "details": 1
-        }
-      },
-      {
-        "input": {
-          "reviewText": "Returned after 3 days. The zipper broke on first use and the stitching came apart at the seams."
-        },
-        "expectedOutput": {
-          "quality": "helpful",
-          "sentiment": "negative",
-          "hasSpecificDetails": true
-        },
-        "modelOutput": {
-          "quality": "helpful",
-          "sentiment": "negative",
-          "hasSpecificDetails": true
-        },
-        "score": {
-          "quality": 1,
-          "sentiment": 1,
-          "details": 1
-        }
-      },
-      {
-        "input": {
-          "reviewText": "DO NOT BUY THIS PRODUCT"
-        },
-        "expectedOutput": {
-          "quality": "unhelpful",
-          "sentiment": "negative",
-          "hasSpecificDetails": false
-        },
-        "modelOutput": {
-          "quality": "unhelpful",
-          "sentiment": "negative",
-          "hasSpecificDetails": false
-        },
-        "score": {
-          "quality": 1,
-          "sentiment": 1,
-          "details": 1
-        }
-      },
       {
         "input": {
           "reviewText": "Perfect gift for my mom. The ceramic finish looks premium and the 2-year warranty is a plus."
@@ -135,27 +77,73 @@
           "sentiment": 1,
           "details": 1
         }
+      },
+      {
+        "input": {
+          "reviewText": "Love it!!!!!!"
+        },
+        "expectedOutput": {
+          "quality": "unhelpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": false
+        },
+        "modelOutput": {
+          "quality": "unhelpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": false
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "The 12W motor handles frozen fruit easily. Cleanup is simple — dishwasher safe blades."
+        },
+        "expectedOutput": {
+          "quality": "helpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": true
+        },
+        "modelOutput": {
+          "quality": "helpful",
+          "sentiment": "positive",
+          "hasSpecificDetails": true
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "After 6 months of daily use the non-stick coating started peeling. Heats unevenly on the edges."
+        },
+        "expectedOutput": {
+          "quality": "helpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": true
+        },
+        "modelOutput": {
+          "quality": "helpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": true
+        },
+        "score": {
+          "quality": 1,
+          "sentiment": 1,
+          "details": 1
+        }
       }
     ],
     "stats": {
-      "totalCalls": 0,
-      "successfulDemos": 0,
-      "estimatedTokenUsage": 0,
-      "earlyStopped": false,
-      "resourceUsage": {
-        "totalTokens": 0,
-        "totalTime": 2319,
-        "avgLatencyPerEval": 0,
-        "costByModel": {}
-      },
-      "convergenceInfo": {
-        "converged": true,
-        "finalImprovement": 0,
-        "stagnationRounds": 0,
-        "convergenceThreshold": 0
-      },
-      "bestScore": 0,
-      "bestConfiguration": {}
+      "agentSteps": 7,
+      "baselineCombined": 1,
+      "finalCombined": 1,
+      "elapsedMs": 58168
     }
   }
 }

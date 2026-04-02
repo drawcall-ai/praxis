@@ -18,7 +18,7 @@ export type ModelMetricFn<
   input: z.infer<z.ZodObject<I>>;
   modelOutput: z.infer<z.ZodObject<O>>;
   exampleOutput?: z.infer<z.ZodObject<O>>;
-}) => number | Record<string, number> | null | undefined;
+}) => Record<string, number> | null | undefined;
 
 export type ModelExamples<
   I extends z.ZodRawShape = z.ZodRawShape,
@@ -40,6 +40,7 @@ export interface ModelDefinition<
   output: z.ZodObject<O>;
   examples: ModelExamples<I, O>;
   metric?: ModelMetricFn<I, O>;
+  metricWeights?: Record<string, number>;
 }
 
 // ── Config (model.config.json) ──────────────────────────────────────
@@ -51,16 +52,11 @@ export interface PraxisConfigSchema {
   output: JsonSchema;
 }
 
-export interface PraxisDemo {
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
-}
-
 export interface PraxisEvalRun {
   input: Record<string, unknown>;
   expectedOutput: Record<string, unknown>;
   modelOutput: Record<string, unknown>;
-  score: number | Record<string, number>;
+  score: Record<string, number>;
 }
 
 export interface ModelConfig {
@@ -69,10 +65,8 @@ export interface ModelConfig {
   teacher?: string;
   schema: PraxisConfigSchema;
   optimization: {
-    optimizer: string;
     instruction: string;
-    demos: PraxisDemo[];
-    bestScore: number | Record<string, number>;
+    bestScore: Record<string, number>;
     evalRuns?: PraxisEvalRun[];
     stats?: Record<string, unknown>;
   };
@@ -95,6 +89,26 @@ export interface ModelRequest<O extends z.ZodRawShape = z.ZodRawShape> {
 export interface TrainOptions {
   definitionPath: string;
   output: string;
-  optimizer: 'auto' | 'ace' | 'gepa';
   split: number;
+}
+
+// ── Scoring ─────────────────────────────────────────────────────────
+
+export function computeCombinedScore(
+  scores: Record<string, number>,
+  weights?: Record<string, number>,
+): number {
+  const keys = Object.keys(scores);
+  if (keys.length === 0) return 0;
+  if (!weights) {
+    return keys.reduce((sum, k) => sum + scores[k], 0) / keys.length;
+  }
+  let totalWeight = 0;
+  let weightedSum = 0;
+  for (const k of keys) {
+    const w = weights[k] ?? 1;
+    weightedSum += scores[k] * w;
+    totalWeight += w;
+  }
+  return totalWeight > 0 ? weightedSum / totalWeight : 0;
 }

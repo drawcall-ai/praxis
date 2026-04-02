@@ -37,6 +37,6 @@ export default defineModel({
 
   metric: ({ modelOutput, exampleOutput }) => {
     if (!exampleOutput) return null;
-    return modelOutput.sentiment === exampleOutput.sentiment ? 1 : 0;
+    return { accuracy: modelOutput.sentiment === exampleOutput.sentiment ? 1 : 0 };
   },
 });

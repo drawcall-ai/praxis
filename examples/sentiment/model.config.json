@@ -43,24 +43,58 @@
     }
   },
   "optimization": {
-    "optimizer": "ace",
-    "instruction": "## Sentiment Classification Guidelines\n- - Clear, unambiguous language expressing dissatisfaction (e.g., \"terrible\", \"broke\", \"would not recommend\", \"waste of money\") should result in a high-confidence negative sentiment classification.\n- - Clear, unambiguous language expressing satisfaction or praise (e.g., \"amazing\", \"fast\") should result in a high-confidence positive sentiment classification.\n- - Text that only states objective facts without evaluative language (e.g., \"It is a product. It exists.\") should be classified as neutral.\n- - Mild or lukewarm evaluative language (e.g., \"works fine\", \"nothing special\") expresses a degree of satisfaction or dissatisfaction and should be classified as positive or negative, not neutral. Neutral sentiment is strictly reserved for objective, factual statements.",
-    "demos": [],
-    "bestScore": 1,
+    "instruction": "You are an expert sentiment analysis AI. Your task is to analyze product reviews and determine the overarching sentiment and your confidence level in that classification.\n\nInput:\n  reviewText: string — The text of the product review to analyze\n\nOutput format:\nRespond ONLY with a valid JSON object matching this schema. Provide no other text or explanation. \n{\n  \"sentiment\": \"positive\" | \"negative\" | \"neutral\",\n  \"confidence\": number // A float between 0 and 1\n}\n\nGuidelines:\n- \"positive\": Reviews expressing satisfaction, praise, or excitement.\n- \"negative\": Reviews expressing dissatisfaction, poor quality, or regret.\n- \"neutral\": Acceptable but unenthusiastic, balanced, or non-committal statements (e.g., \"works fine\", \"does the job\").\n- Assign a confidence score: 0.90-1.0 for strongly clear sentiments, 0.70-0.89 for less intense or more measured statements.\n\nEnsure your reasoning focuses on matching these criteria, and your final output is strictly the requested JSON.",
+    "bestScore": {
+      "accuracy": 1
+    },
     "evalRuns": [
       {
         "input": {
-          "reviewText": "Five stars! Exceeded my expectations."
+          "reviewText": "It is a product. It exists."
         },
         "expectedOutput": {
-          "sentiment": "positive",
-          "confidence": 0.97
+          "sentiment": "neutral",
+          "confidence": 0.65
         },
         "modelOutput": {
-          "sentiment": "positive",
-          "confidence": 1
+          "sentiment": "neutral",
+          "confidence": 0.95
         },
-        "score": 1
+        "score": {
+          "accuracy": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "Complete waste of money."
+        },
+        "expectedOutput": {
+          "sentiment": "negative",
+          "confidence": 0.94
+        },
+        "modelOutput": {
+          "sentiment": "negative",
+          "confidence": 0.99
+        },
+        "score": {
+          "accuracy": 1
+        }
+      },
+      {
+        "input": {
+          "reviewText": "The product is okay for the price."
+        },
+        "expectedOutput": {
+          "sentiment": "neutral",
+          "confidence": 0.75
+        },
+        "modelOutput": {
+          "sentiment": "neutral",
+          "confidence": 0.85
+        },
+        "score": {
+          "accuracy": 1
+        }
       },
       {
         "input": {
@@ -74,56 +108,16 @@
           "sentiment": "negative",
           "confidence": 0.98
         },
-        "score": 1
-      },
-      {
-        "input": {
-          "reviewText": "The product is okay for the price."
-        },
-        "expectedOutput": {
-          "sentiment": "neutral",
-          "confidence": 0.75
-        },
-        "modelOutput": {
-          "sentiment": "neutral",
-          "confidence": 0.95
-        },
-        "score": 1
-      },
-      {
-        "input": {
-          "reviewText": "Does what it says, no more no less."
-        },
-        "expectedOutput": {
-          "sentiment": "neutral",
-          "confidence": 0.7
-        },
-        "modelOutput": {
-          "sentiment": "neutral",
-          "confidence": 0.95
-        },
-        "score": 1
+        "score": {
+          "accuracy": 1
+        }
       }
     ],
     "stats": {
-      "totalCalls": 8,
-      "successfulDemos": 0,
-      "estimatedTokenUsage": 0,
-      "earlyStopped": false,
-      "resourceUsage": {
-        "totalTokens": 0,
-        "totalTime": 179968,
-        "avgLatencyPerEval": 0,
-        "costByModel": {}
-      },
-      "convergenceInfo": {
-        "converged": true,
-        "finalImprovement": 1,
-        "stagnationRounds": 0,
-        "convergenceThreshold": 0.01
-      },
-      "bestScore": 1,
-      "bestConfiguration": {}
+      "agentSteps": 10,
+      "baselineCombined": 1,
+      "finalCombined": 1,
+      "elapsedMs": 82302
     }
   }
 }

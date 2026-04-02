@@ -10,7 +10,6 @@ const shared = {
     "vite-node",
     "vite-node/client",
     "vite-node/server",
-    "@ax-llm/ax",
     "ai",
     "@openrouter/ai-sdk-provider",
     "dotenv",

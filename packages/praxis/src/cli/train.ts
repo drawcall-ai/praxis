@@ -1,16 +1,17 @@
 import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
-import { config as loadEnv } from 'dotenv';
+import { generateText as aiGenerateText, Output, tool, stepCountIs, wrapLanguageModel, extractJsonMiddleware } from 'ai';
+import { createOpenRouter } from '@openrouter/ai-sdk-provider';
+import { z } from 'zod';
 import pMap from 'p-map';
-import { AxAIOpenRouter, AxGen, AxACE, AxGEPA } from '@ax-llm/ax';
-import type { AxACEPlaybook, AxProgramDemos, AxMetricFn, AxMultiMetricFn, AxFieldValue, AxOptimizerLoggerData } from '@ax-llm/ax';
-import { toAxSignature, serializeSchema } from '../schema.js';
+import { serializeSchema, formatSchemaForPrompt } from '../schema.js';
+import { buildDefaultSystemPrompt } from '../prompt.js';
 import { detectMismatches } from '../validate.js';
+import { computeCombinedScore } from '../types.js';
 import type {
   ModelDefinition,
   ModelExample,
   ModelConfig,
-  PraxisDemo,
   PraxisEvalRun,
   TrainOptions,
 } from '../types.js';
@@ -21,29 +22,13 @@ import {
   validateDefinition, formatZodSchema,
 } from './utils.js';
 
-type AxExample = Record<string, AxFieldValue>;
-
 const EVAL_CONCURRENCY = 10;
-const BAR_WIDTH = 20;
-
-// ── Progress helpers ──────────────────────────────────────────────────
-
-function progressBar(ratio: number): string {
-  const filled = Math.round(ratio * BAR_WIDTH);
-  return `${'█'.repeat(filled)}${dim('░'.repeat(BAR_WIDTH - filled))}`;
-}
-
-function writeProgress(msg: string) {
-  process.stdout.write(`\r\x1b[K  ${msg}`);
-}
-
-function writeDone(msg: string) {
-  process.stdout.write(`\r\x1b[K  ${green('✓')} ${msg}\n`);
-}
+const MAX_TEST_PER_CALL = 20;
+const MAX_AGENT_STEPS = 20;
 
 // ── CLI handler ────────────────────────────────────────────────────────
 
-export async function handleTrain(opts: { definition?: string; output?: string; optimizer: string; split: string; force: boolean }) {
+export async function handleTrain(opts: { definition?: string; output?: string; split: string; force: boolean }) {
   const definitionPath = await resolveDefinitionPath(opts.definition);
   const defDir = dirname(definitionPath);
   const defaultOutput = resolve(defDir, DEFAULT_CONFIG);
@@ -51,17 +36,14 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
   const options: TrainOptions = {
     definitionPath,
     output: opts.output ? resolve(opts.output) : defaultOutput,
-    optimizer: opts.optimizer as TrainOptions['optimizer'],
     split: parseFloat(opts.split),
   };
 
-  loadEnv({ path: resolve(dirname(options.definitionPath), '.env') });
   requireEnvKey();
 
   const definition = await loadDefinition(options.definitionPath);
   validateDefinition(definition, true);
 
-  // ── Train guard: decide train / skip / error ─────────────────────
   if (!opts.force) {
     let existingConfig: ModelConfig | undefined;
     try {
@@ -88,7 +70,6 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
     }
   }
 
-  // ── Resolve examples ─────────────────────────────────────────────
   const resolvedExamples = Array.isArray(definition.examples)
     ? definition.examples
     : await definition.examples();
@@ -96,7 +77,7 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
 
   console.log('');
   const teacherLabel = definition.teacher ? ` · teacher: ${definition.teacher}` : '';
-  console.log(`  ${bold(definition.student)} ${dim(`${options.optimizer.toUpperCase()} · ${resolvedExamples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
+  console.log(`  ${bold(definition.student)} ${dim(`${resolvedExamples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
   console.log('');
   console.log(formatZodSchema(definition));
   console.log('');
@@ -108,7 +89,8 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
   console.log('');
   console.log(`  ${green('✓')} ${bold(options.output)}`);
   if (testScore !== null) {
-    console.log(`  ${green('✓')} test score ${bold(JSON.stringify(testScore))}`);
+    const scoreStr = Object.entries(testScore).map(([k, v]) => `${k}: ${v.toFixed(2)}`).join(', ');
+    console.log(`  ${green('✓')} test score: ${bold(scoreStr)}`);
   }
   console.log('');
 }
@@ -117,20 +99,31 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
 
 interface TrainResult {
   config: ModelConfig;
-  testScore: number | Record<string, number> | null;
+  testScore: Record<string, number> | null;
   evalRuns: PraxisEvalRun[];
+}
+
+// ── Evaluation types ───────────────────────────────────────────────────
+
+interface EvalResult {
+  id: number;
+  input: Record<string, unknown>;
+  expectedOutput: Record<string, unknown>;
+  modelOutput: Record<string, unknown>;
+  score: Record<string, number>;
+  reasoning: string;
 }
 
 async function train(
   definition: ModelDefinition,
-  options: Pick<TrainOptions, 'optimizer' | 'split'>,
+  options: Pick<TrainOptions, 'split'>,
 ): Promise<TrainResult> {
   const { student } = definition;
   const startTime = Date.now();
   const elapsed = () => dim(`${((Date.now() - startTime) / 1000).toFixed(0)}s`);
 
   if (!Array.isArray(definition.examples)) {
-    throw new Error('train() expects resolved examples (plain array). Use resolveExamples() first.');
+    throw new Error('train() expects resolved examples. Use resolveExamples() first.');
   }
   const examples = definition.examples;
 
@@ -142,154 +135,412 @@ async function train(
     throw new Error('Definition must export a "metric" function');
   }
 
-  validateMetric(definition, examples);
-
-  const metricType = probeMetricType(definition, examples);
-  const isMulti = metricType === 'multi';
-
-  let optimizerType = options.optimizer;
-  if (optimizerType === 'auto') {
-    optimizerType = isMulti ? 'gepa' : 'ace';
-  }
-
-  const signature = toAxSignature(definition);
+  const metricKeys = probeMetricKeys(definition, examples);
+  const weights = definition.metricWeights;
 
   // ── Train/test split ─────────────────────────────────────────────
   const shuffled = [...examples].sort(() => Math.random() - 0.5);
-  const splitIdx = Math.floor(shuffled.length * options.split);
+  const testCount = Math.min(Math.round(shuffled.length * (1 - options.split)), 50);
+  const splitIdx = shuffled.length - testCount;
   const trainExamples = shuffled.slice(0, splitIdx);
   const testExamples = shuffled.slice(splitIdx);
 
-  // ── Build AX components ──────────────────────────────────────────
+  console.log(`  ${dim(`${trainExamples.length} train / ${testExamples.length} test`)}`);
+  console.log(`  ${dim(`metric keys: ${metricKeys.join(', ')}`)}`);
+  if (weights) console.log(`  ${dim(`weights: ${JSON.stringify(weights)}`)}`);
+
+  // ── OpenRouter setup ─────────────────────────────────────────────
   const apiKey = process.env.OPENROUTER_KEY ?? process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error('OPENROUTER_KEY not found in environment.');
-  }
+  if (!apiKey) throw new Error('OPENROUTER_KEY not found in environment.');
 
-  const ai = new AxAIOpenRouter<string>({ apiKey, config: { model: student } });
-  const teacherAI = definition.teacher
-    ? new AxAIOpenRouter<string>({ apiKey, config: { model: definition.teacher } })
-    : undefined;
-  const program = new AxGen(signature);
-  if (definition.description) {
-    program.setDescription(definition.description);
-  }
+  const openrouter = createOpenRouter({ apiKey });
+  const teacherModel = definition.teacher ?? student;
 
-  const toAxExample = (ex: ModelExample): AxExample => {
-    return { ...ex.input, ...(ex.output ?? {}) } as AxExample;
-  };
+  // ── Evaluate helper ──────────────────────────────────────────────
+  const runs = new Map<string, EvalResult[]>();
+  let runCounter = 0;
+  function nextRunId() { return `run-${++runCounter}`; }
 
-  const axTrainExamples = trainExamples.map(toAxExample);
-  const axTestExamples = testExamples.map(toAxExample);
+  let currentPrompt = buildDefaultSystemPrompt(definition);
+  let currentTemperature = 0;
 
-  // ── Progress tracking ───────────────────────────────────────────
-  // ACE's compile() only emits progress via optimizerLogger (not onProgress).
-  // We store the latest round info and render it from a single interval.
-  let lastRound: { round: number; totalRounds: number; bestScore: number } | undefined;
+  async function evaluate(
+    systemPrompt: string,
+    exampleSet: ModelExample[],
+    ids: number[],
+  ): Promise<{ runId: string; results: EvalResult[] }> {
+    const runId = nextRunId();
+    const validIds = ids.filter((id) => exampleSet[id] != null);
+    const resultMap = new Map<number, EvalResult>();
 
-  const optimizerLogger = (data: AxOptimizerLoggerData) => {
-    if (data.name === 'RoundProgress') {
-      lastRound = data.value;
-    }
-  };
-
-  const progressTimer = setInterval(() => {
-    const round = lastRound?.round ?? 0;
-    const totalRounds = lastRound?.totalRounds ?? axTrainExamples.length;
-    const best = lastRound?.bestScore;
-    const pct = totalRounds > 0 ? round / totalRounds : 0;
-    const scoreStr = best != null ? ` best: ${best.toFixed(2)}` : '';
-    const ms = Date.now() - startTime;
-    const etaStr = round > 0
-      ? dim(` ~${Math.ceil((ms / round) * (totalRounds - round) / 1000)}s left`)
-      : dim(` ${elapsed()}`);
-    writeProgress(`Optimizing ${progressBar(pct)} ${dim(`${round}/${totalRounds}`)}${scoreStr}${etaStr}`);
-  }, 1000);
-  progressTimer.unref();
-
-  // ── Run optimization ─────────────────────────────────────────────
-  let instruction = '';
-  let demos: PraxisDemo[] = [];
-  let bestScore: number | Record<string, number> = 0;
-  let stats: Record<string, unknown> = {};
-
-  const useMinibatch = trainExamples.length > 50;
-  const optimizerArgs: ConstructorParameters<typeof AxACE>[0] = {
-    studentAI: ai,
-    teacherAI,
-    optimizerLogger,
-    debugOptimizer: true,
-    ...(useMinibatch ? { minibatch: true, minibatchSize: Math.min(25, Math.ceil(trainExamples.length / 4)) } : {}),
-  };
-
-  writeProgress('Optimizing…');
-
-  try {
-    if (optimizerType === 'ace') {
-      const axMetric = adaptSingleMetric(definition);
-      const optimizer = new AxACE(optimizerArgs);
-      const result = await optimizer.compile(program, axTrainExamples, axMetric, {
-        earlyStoppingPatience: 5,
-        aceOptions: { maxEpochs: 1 },
-      });
-
-      instruction = renderPlaybook(result.playbook);
-      demos = extractDemos(result.demos, definition);
-      bestScore = result.bestScore ?? 0;
-      stats = { ...result.stats };
-
-      // Apply all optimized state (instruction, demos, modelConfig) to the program for eval
-      if (result.optimizedProgram) {
-        program.applyOptimization(result.optimizedProgram);
-      }
-    } else {
-      const axMultiMetric = adaptMultiMetric(definition);
-      const optimizer = new AxGEPA(optimizerArgs);
-      const result = await optimizer.compilePareto(program, axTrainExamples, axMultiMetric, {
-        earlyStoppingPatience: 5,
-      });
-
-      const bestSolution = result.paretoFront?.[0];
-      instruction = result.optimizedProgram?.instruction ?? '';
-      demos = bestSolution
-        ? extractDemos(bestSolution.demos, definition)
-        : extractDemos(result.demos, definition);
-      bestScore = bestSolution?.scores ?? {};
-      stats = { ...result.stats };
-
-      // Apply all optimized state (instruction, instructionMap, demos, modelConfig) for eval
-      if (result.optimizedProgram) {
-        program.applyOptimization(result.optimizedProgram);
-      }
-    }
-  } finally {
-    clearInterval(progressTimer);
-  }
-
-  const scoreLabel = typeof bestScore === 'number'
-    ? `score ${bestScore}`
-    : Object.entries(bestScore).map(([k, v]) => `${k}: ${v}`).join(', ');
-  writeDone(`Optimized — ${scoreLabel} ${elapsed()}`);
-
-  // ── Evaluate on test set ─────────────────────────────────────────
-  let testScore: number | Record<string, number> | null = null;
-  let evalRuns: PraxisEvalRun[] = [];
-
-  if (testExamples.length > 0) {
-    let completed = 0;
-    const total = testExamples.length;
-
-    const evalResult = await evaluate(ai, program, axTestExamples, definition, isMulti, () => {
-      completed++;
-      writeProgress(`Evaluating ${dim(`${completed}/${total}`)}`);
+    const model = wrapLanguageModel({
+      model: openrouter.chat(student),
+      middleware: extractJsonMiddleware(),
     });
 
-    testScore = evalResult.score;
-    evalRuns = evalResult.runs;
-    writeDone(`Evaluated — test score ${JSON.stringify(testScore)} ${elapsed()}`);
+    await pMap(validIds, async (id) => {
+      const ex = exampleSet[id];
+      const input = ex.input as Record<string, unknown>;
+      const userContent = Object.entries(input)
+        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+        .join('\n');
+      try {
+        const result = await aiGenerateText({
+          model,
+          system: systemPrompt,
+          prompt: userContent,
+          output: Output.object({ schema: definition.output }),
+          temperature: currentTemperature,
+          providerOptions: {
+            openrouter: { reasoning: { effort: 'low', exclude: false } },
+          },
+        });
+        const modelOutput = (result.output ?? {}) as Record<string, unknown>;
+        let reasoning = '';
+        if (typeof result.reasoning === 'string') {
+          reasoning = result.reasoning;
+        } else if (Array.isArray(result.reasoning)) {
+          reasoning = (result.reasoning as any[])
+            .filter((r) => r.type === 'reasoning' && typeof r.text === 'string' && r.text !== '[REDACTED]')
+            .map((r) => r.text)
+            .join('\n');
+        }
+        const score = definition.metric!({
+          input: ex.input as Record<string, unknown>,
+          modelOutput: modelOutput as any,
+          exampleOutput: ex.output as any,
+        }) ?? Object.fromEntries(metricKeys.map((k) => [k, 0]));
+
+        resultMap.set(id, {
+          id, input, modelOutput,
+          expectedOutput: (ex.output ?? {}) as Record<string, unknown>,
+          score, reasoning,
+        });
+      } catch {
+        resultMap.set(id, {
+          id, input,
+          modelOutput: {},
+          expectedOutput: (ex.output ?? {}) as Record<string, unknown>,
+          score: Object.fromEntries(metricKeys.map((k) => [k, 0])),
+          reasoning: '',
+        });
+      }
+    }, { concurrency: EVAL_CONCURRENCY });
+
+    const results = validIds.map((id) => resultMap.get(id)!);
+    runs.set(runId, results);
+    return { runId, results };
+  }
+
+  // ── Formatting helpers ───────────────────────────────────────────
+
+  function formatCompactTable(results: EvalResult[]): string {
+    if (results.length === 0) return '(no results)';
+
+    const headerCols = metricKeys.map((k) => {
+      const w = weights?.[k];
+      return w != null ? `${k} (${w})` : k;
+    });
+    headerCols.push('combinedScore');
+
+    const header = `| Examples | ${headerCols.join(' | ')} |`;
+    const sep = `|----------|${headerCols.map(() => '---').join('|')}|`;
+
+    const rows: string[] = [];
+    let rangeStart = results[0].id;
+    let rangeEnd = rangeStart;
+    let currentScore = results[0].score;
+
+    function emitRow(start: number, end: number, score: Record<string, number>) {
+      const label = start === end ? `#${start}` : `#${start}-#${end}`;
+      const vals = metricKeys.map((k) => String(score[k] ?? 0));
+      vals.push(computeCombinedScore(score, weights).toFixed(2));
+      rows.push(`| ${label} | ${vals.join(' | ')} |`);
+    }
+
+    function scoresEqual(a: Record<string, number>, b: Record<string, number>) {
+      return metricKeys.every((k) => (a[k] ?? 0) === (b[k] ?? 0));
+    }
+
+    for (let i = 1; i <= results.length; i++) {
+      const r = results[i];
+      if (r && scoresEqual(r.score, currentScore)) {
+        rangeEnd = r.id;
+      } else {
+        emitRow(rangeStart, rangeEnd, currentScore);
+        if (r) {
+          rangeStart = r.id;
+          rangeEnd = r.id;
+          currentScore = r.score;
+        }
+      }
+    }
+
+    return [header, sep, ...rows].join('\n');
+  }
+
+  function summarize(results: EvalResult[]): string {
+    const avg: Record<string, number> = {};
+    for (const k of metricKeys) {
+      avg[k] = results.length > 0
+        ? results.reduce((sum, r) => sum + (r.score[k] ?? 0), 0) / results.length
+        : 0;
+    }
+    const combined = computeCombinedScore(avg, weights);
+    const parts = metricKeys.map((k) => `${k}: ${(avg[k] * 100).toFixed(1)}%`);
+    parts.push(`combined: ${(combined * 100).toFixed(1)}%`);
+    return parts.join(' | ');
+  }
+
+  function avgScores(results: EvalResult[]): Record<string, number> {
+    const avg: Record<string, number> = {};
+    for (const k of metricKeys) {
+      avg[k] = results.length > 0
+        ? results.reduce((sum, r) => sum + (r.score[k] ?? 0), 0) / results.length
+        : 0;
+    }
+    return avg;
+  }
+
+  // ── Baseline eval on test set ────────────────────────────────────
+  console.log(`  Evaluating baseline on test set... ${elapsed()}`);
+  const allTestIds = testExamples.map((_, i) => i);
+  const baselineTest = await evaluate(currentPrompt, testExamples, allTestIds);
+  const baselineTestScores = avgScores(baselineTest.results);
+  const baselineCombined = computeCombinedScore(baselineTestScores, weights);
+  console.log(`  ${green('✓')} Baseline (test): ${summarize(baselineTest.results)} ${elapsed()}`);
+
+  // ── Agent system prompt ──────────────────────────────────────────
+  const allTrainIds = trainExamples.map((_, i) => i);
+
+  const schemaDesc = formatSchemaForPrompt(definition);
+  const metricDesc = metricKeys.length === 1 && metricKeys[0] === 'default'
+    ? 'Single score (0 or 1).'
+    : `Multi-metric: ${metricKeys.join(', ')}.${weights ? ` Weights: ${JSON.stringify(weights)}.` : ' Equal weights.'}`;
+
+  const agentSystemPrompt = `You are a prompt optimization agent. Your goal is to write the best possible system prompt for a target LLM.
+
+## Task Definition
+${definition.name ? `Task: ${definition.name}` : ''}
+${definition.description ? `Description: ${definition.description}` : ''}
+
+${schemaDesc}
+
+**Important:** The target model has internal reasoning/thinking enabled. It thinks before answering, then outputs structured JSON.
+
+**Metric:** ${metricDesc} The table shows per-metric scores and a \`combinedScore\` (weighted average).
+
+## What a system prompt can contain
+
+A system prompt is not limited to a simple instruction. You can include any combination of:
+
+- **Role and persona** — who the model should act as
+- **Step-by-step algorithms** — explicit reasoning procedures to follow
+- **Few-shot examples** — worked input/output pairs showing correct behavior
+- **Lookup tables or mappings** — reference data the model should consult
+- **Rules and constraints** — explicit "always do X" / "never do Y" directives
+- **Edge case handling** — specific instructions for known tricky cases
+- **Common mistake warnings** — "the model often confuses X with Y, be careful"
+
+The current prompt is just a starting point. You have full creative freedom.
+
+## Tools
+
+- **write_prompt(promptName, promptContent)**: update the system prompt
+- **test_examples(ids)**: run up to ${MAX_TEST_PER_CALL} examples. Returns a runId + compact score table.
+- **view_input(exampleIds)**: view raw input text + expected answer. Inputs are static across runs.
+- **view_output(runId, exampleIds)**: view predictions, scores, AND the target model's internal reasoning/thoughts. Use this to see HOW the model reasoned and where its logic breaks down.
+- **set_temperature(temperature)**: set the target model's temperature (default 0).
+
+## MANDATORY workflow — you MUST follow these steps in order:
+
+1. **Test** a subset of examples to get a baseline score and a runId
+2. **Diagnose** — call view_input on failing example IDs to see what the questions are, then call view_output on the same runId+IDs to see how the model REASONED and where it went wrong. DO NOT skip this step.
+3. **Analyze** the reasoning errors — look for patterns in how the model thinks
+4. **Write** an improved prompt that specifically addresses the reasoning errors you observed
+5. **Test** on the failing examples to see if your fix works
+6. **Repeat** from step 2 if failures remain
+
+NEVER write a prompt without first looking at actual examples and model reasoning via view_input and view_output.`;
+
+  const userMessage = `You have ${trainExamples.length} training examples available (indices 0-${trainExamples.length - 1}).
+
+## Current System Prompt
+\`\`\`
+${currentPrompt}
+\`\`\`
+
+Start by testing a batch of examples, then use view_input and view_output to understand the failures BEFORE writing any new prompt.`;
+
+  // ── Agent loop ───────────────────────────────────────────────────
+  console.log(`  Starting optimizer agent (${teacherModel})... ${elapsed()}`);
+
+  function extractReasoning(r: unknown): string {
+    if (typeof r === 'string') return r;
+    if (Array.isArray(r)) {
+      return r
+        .filter((p: any) => p.type === 'reasoning' && typeof p.text === 'string' && p.text !== '[REDACTED]')
+        .map((p: any) => p.text)
+        .join('\n');
+    }
+    return '';
+  }
+
+  const { text: agentText, steps } = await aiGenerateText({
+    model: openrouter.chat(teacherModel),
+    system: agentSystemPrompt,
+    prompt: userMessage,
+    providerOptions: {
+      openrouter: { reasoning: { effort: 'high', exclude: false } },
+    },
+    onStepFinish({ stepNumber, text, toolCalls, reasoning, finishReason }) {
+      const tools = toolCalls?.length ? ` → ${toolCalls.map((tc) => tc.toolName).join(', ')}` : '';
+      console.log(`  [step ${stepNumber}${tools}] (${finishReason}) ${elapsed()}`);
+      const thoughts = extractReasoning(reasoning);
+      if (thoughts.trim()) {
+        const lines = thoughts.trim().split('\n');
+        const preview = lines.slice(0, 4).join('\n');
+        for (const line of preview.split('\n')) {
+          console.log(`    ${dim(line)}`);
+        }
+        if (lines.length > 4) console.log(`    ${dim(`... (${lines.length - 4} more lines)`)}`);
+      }
+    },
+    tools: {
+      write_prompt: tool({
+        description: 'Write or update the system prompt for the target model.',
+        inputSchema: z.object({
+          promptName: z.string().describe('Use "system"'),
+          promptContent: z.string().describe('The full system prompt content'),
+        }),
+        execute: async ({ promptName, promptContent }) => {
+          if (promptName === 'system') {
+            currentPrompt = promptContent;
+            console.log(`  ${dim(`[write_prompt] ${promptContent.length} chars`)}`);
+            return `Prompt updated (${promptContent.length} chars).`;
+          }
+          return `Unknown prompt "${promptName}". Use "system".`;
+        },
+      }),
+
+      test_examples: tool({
+        description: `Run examples against the current system prompt. Returns a runId and compact results table. Max ${MAX_TEST_PER_CALL} examples per call.`,
+        inputSchema: z.object({
+          ids: z.array(z.number()).describe(`Example indices to test. Max ${MAX_TEST_PER_CALL} per call.`),
+        }),
+        execute: async ({ ids }) => {
+          if (ids.length > MAX_TEST_PER_CALL) {
+            return `Error: requested ${ids.length} examples but max is ${MAX_TEST_PER_CALL}. Pick a smaller subset.`;
+          }
+          console.log(`  ${dim(`[test_examples] ${ids.length} example(s)...`)}`);
+          const { runId, results } = await evaluate(currentPrompt, trainExamples, ids);
+          console.log(`  ${dim(`[test_examples] ${runId}: ${summarize(results)}`)}`);
+          const table = formatCompactTable(results);
+          const failed = results.filter((r) => computeCombinedScore(r.score, weights) < 1).map((r) => r.id);
+          return `${runId} — ${summarize(results)}\n${table}\n\nFailed IDs: ${failed.length > 0 ? failed.join(', ') : 'none'}`;
+        },
+      }),
+
+      view_input: tool({
+        description: 'View the input text and expected output for specific training examples. Inputs are static across runs.',
+        inputSchema: z.object({
+          exampleIds: z.array(z.number()).describe('Example indices to view'),
+        }),
+        execute: async ({ exampleIds }) => {
+          const rows = exampleIds
+            .filter((id) => trainExamples[id] != null)
+            .map((id) => {
+              const ex = trainExamples[id];
+              const input = Object.entries(ex.input as Record<string, unknown>)
+                .map(([k, v]) => `  ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+                .join('\n');
+              const output = ex.output
+                ? Object.entries(ex.output as Record<string, unknown>)
+                    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+                    .join(', ')
+                : '(none)';
+              return `## Example #${id}\n${input}\nExpected: ${output}`;
+            });
+          return rows.length > 0 ? rows.join('\n\n') : 'No matching examples found.';
+        },
+      }),
+
+      view_output: tool({
+        description: "View predictions, scores, and the target model's internal reasoning for specific examples from a previous run.",
+        inputSchema: z.object({
+          runId: z.string().describe('The runId from a previous test_examples call'),
+          exampleIds: z.array(z.number()).describe('Example indices to view'),
+        }),
+        execute: async ({ runId, exampleIds }) => {
+          const runResults = runs.get(runId);
+          if (!runResults) return `Run "${runId}" not found. Available: ${[...runs.keys()].join(', ')}`;
+
+          const requested = exampleIds
+            .map((id) => runResults.find((r) => r.id === id))
+            .filter(Boolean) as EvalResult[];
+
+          if (requested.length === 0) return 'No matching examples found.';
+
+          return requested.map((r) => {
+            const status = computeCombinedScore(r.score, weights) >= 1 ? 'CORRECT' : 'WRONG';
+            const scoreStr = Object.entries(r.score).map(([k, v]) => `${k}: ${v}`).join(', ');
+            const outputStr = Object.entries(r.modelOutput).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
+            let section = `## Example #${r.id} — ${status}\nPrediction: ${outputStr}\nScore: ${scoreStr}`;
+            if (r.reasoning) section += `\n\nModel's reasoning:\n${r.reasoning}`;
+            return section;
+          }).join('\n\n---\n\n');
+        },
+      }),
+
+      set_temperature: tool({
+        description: 'Set the temperature for the target model (default 0).',
+        inputSchema: z.object({
+          temperature: z.number().min(0).max(2).describe('Temperature value'),
+        }),
+        execute: async ({ temperature }) => {
+          currentTemperature = temperature;
+          console.log(`  ${dim(`[set_temperature] ${temperature}`)}`);
+          return `Temperature set to ${temperature}.`;
+        },
+      }),
+    },
+    stopWhen: stepCountIs(MAX_AGENT_STEPS),
+  });
+
+  if (agentText) {
+    console.log(`  ${dim('Agent:')} ${agentText.slice(0, 200)}${agentText.length > 200 ? '...' : ''}`);
+  }
+
+  console.log(`  ${green('✓')} Agent finished (${steps.length} steps) ${elapsed()}`);
+
+  // ── Final eval on test set ───────────────────────────────────────
+  console.log(`  Evaluating final prompt on test set... ${elapsed()}`);
+  const finalTest = await evaluate(currentPrompt, testExamples, allTestIds);
+  const finalTestScores = avgScores(finalTest.results);
+  const finalCombined = computeCombinedScore(finalTestScores, weights);
+  console.log(`  Final (test): ${summarize(finalTest.results)} ${elapsed()}`);
+
+  // ── Acceptance check ─────────────────────────────────────────────
+  let acceptedPrompt = currentPrompt;
+  let acceptedScores = finalTestScores;
+
+  if (finalCombined < baselineCombined) {
+    console.log(`  ${dim('Final combinedScore regressed — keeping baseline prompt.')}`);
+    acceptedPrompt = buildDefaultSystemPrompt(definition);
+    acceptedScores = baselineTestScores;
+  } else {
+    const improvement = ((finalCombined - baselineCombined) * 100).toFixed(1);
+    console.log(`  ${green('✓')} Accepted — combinedScore improved by ${improvement} pp`);
   }
 
   // ── Build config ─────────────────────────────────────────────────
+  const evalRuns: PraxisEvalRun[] = finalTest.results.map((r) => ({
+    input: r.input,
+    expectedOutput: r.expectedOutput,
+    modelOutput: r.modelOutput,
+    score: r.score,
+  }));
+
   return {
     config: {
       version: definition.version ?? '1.0',
@@ -297,197 +548,32 @@ async function train(
       ...(definition.teacher ? { teacher: definition.teacher } : {}),
       schema: serializeSchema(definition),
       optimization: {
-        optimizer: optimizerType as 'ace' | 'gepa',
-        instruction,
-        demos,
-        bestScore,
+        instruction: acceptedPrompt,
+        bestScore: acceptedScores,
         evalRuns,
-        stats,
+        stats: {
+          agentSteps: steps.length,
+          baselineCombined,
+          finalCombined,
+          elapsedMs: Date.now() - startTime,
+        },
       },
     },
-    testScore,
+    testScore: acceptedScores,
     evalRuns,
   };
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function probeMetricType(def: ModelDefinition, examples: ModelExample[]): 'single' | 'multi' {
+function probeMetricKeys(def: ModelDefinition, examples: ModelExample[]): string[] {
   const example = examples[0];
-  if (!example || !def.metric) return 'single';
+  if (!example || !def.metric) return ['default'];
   const result = def.metric({
     input: example.input as Record<string, unknown>,
     modelOutput: (example.output ?? {}) as Record<string, unknown>,
     exampleOutput: example.output as Record<string, unknown> | undefined,
   });
-  return result != null && typeof result === 'object' ? 'multi' : 'single';
-}
-
-function validateMetric(def: ModelDefinition, examples: ModelExample[]): void {
-  const example = examples[0];
-  if (!example || !def.metric) return;
-  const result = def.metric({
-    input: example.input as Record<string, unknown>,
-    modelOutput: (example.output ?? {}) as Record<string, unknown>,
-    exampleOutput: example.output as Record<string, unknown> | undefined,
-  });
-  if (result == null) {
-    throw new Error(
-      'Metric returned null/undefined for a training example. ' +
-      'If your metric requires the expected output, every example must include an "output" field. ' +
-      'For metrics that work without expected output, return a number instead of null.',
-    );
-  }
-}
-
-function adaptSingleMetric(def: ModelDefinition): AxMetricFn {
-  const inputKeys = Object.keys(def.input.shape);
-  const outputKeys = Object.keys(def.output.shape);
-  const metricFn = def.metric!;
-
-  return ({ prediction, example }) => {
-    const input: Record<string, unknown> = {};
-    const modelOutput: Record<string, unknown> = {};
-    for (const k of inputKeys) input[k] = (prediction as Record<string, unknown>)[k] ?? example?.[k];
-    for (const k of outputKeys) modelOutput[k] = (prediction as Record<string, unknown>)[k];
-
-    let exampleOutput: Record<string, unknown> | undefined;
-    if (example) {
-      exampleOutput = {};
-      for (const k of outputKeys) exampleOutput[k] = example[k];
-    }
-
-    const result = metricFn({ input, modelOutput, exampleOutput });
-    if (result == null) return 0;
-    if (typeof result === 'number') return result;
-    const vals = Object.values(result);
-    return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
-  };
-}
-
-function adaptMultiMetric(def: ModelDefinition): AxMultiMetricFn {
-  const inputKeys = Object.keys(def.input.shape);
-  const outputKeys = Object.keys(def.output.shape);
-  const metricFn = def.metric!;
-
-  return ({ prediction, example }) => {
-    const input: Record<string, unknown> = {};
-    const modelOutput: Record<string, unknown> = {};
-    for (const k of inputKeys) input[k] = (prediction as Record<string, unknown>)[k] ?? example?.[k];
-    for (const k of outputKeys) modelOutput[k] = (prediction as Record<string, unknown>)[k];
-
-    let exampleOutput: Record<string, unknown> | undefined;
-    if (example) {
-      exampleOutput = {};
-      for (const k of outputKeys) exampleOutput[k] = example[k];
-    }
-
-    const result = metricFn({ input, modelOutput, exampleOutput });
-    if (result == null) return {};
-    if (typeof result === 'number') return { default: result };
-    return result;
-  };
-}
-
-function renderPlaybook(playbook: AxACEPlaybook): string {
-  const lines: string[] = [];
-  for (const [section, bullets] of Object.entries(playbook.sections)) {
-    lines.push(`## ${section}`);
-    for (const bullet of bullets) lines.push(`- ${bullet.content}`);
-    lines.push('');
-  }
-  return lines.join('\n').trim();
-}
-
-function extractDemos(axDemos: readonly AxProgramDemos<unknown, unknown>[] | undefined, def: ModelDefinition): PraxisDemo[] {
-  if (!axDemos?.length) return [];
-  const inputKeys = Object.keys(def.input.shape);
-  const outputKeys = Object.keys(def.output.shape);
-  const result: PraxisDemo[] = [];
-
-  for (const demoGroup of axDemos) {
-    for (const trace of demoGroup.traces) {
-      const flat = trace as Record<string, unknown>;
-      const input: Record<string, unknown> = {};
-      const output: Record<string, unknown> = {};
-      for (const k of inputKeys) input[k] = flat[k];
-      for (const k of outputKeys) output[k] = flat[k];
-      result.push({ input, output });
-    }
-  }
-  return result;
-}
-
-interface EvalResult {
-  score: number | Record<string, number>;
-  runs: PraxisEvalRun[];
-}
-
-async function evaluate(
-  ai: AxAIOpenRouter<string>,
-  program: InstanceType<typeof AxGen>,
-  testExamples: AxExample[],
-  definition: ModelDefinition,
-  isMulti: boolean,
-  onProgress?: () => void,
-): Promise<EvalResult> {
-  const inputKeys = Object.keys(definition.input.shape);
-  const outputKeys = Object.keys(definition.output.shape);
-  const runs: PraxisEvalRun[] = [];
-
-  const splitExample = (example: AxExample, prediction: Record<string, unknown>) => {
-    const input: Record<string, unknown> = {};
-    const expectedOutput: Record<string, unknown> = {};
-    const modelOutput: Record<string, unknown> = {};
-    for (const k of inputKeys) input[k] = example[k];
-    for (const k of outputKeys) {
-      expectedOutput[k] = example[k];
-      modelOutput[k] = prediction[k];
-    }
-    return { input, expectedOutput, modelOutput };
-  };
-
-  if (isMulti) {
-    const axMultiMetric = adaptMultiMetric(definition);
-    const allScores: Record<string, number[]> = {};
-
-    await pMap(testExamples, async (example) => {
-      try {
-        const result = await program.forward(ai, example);
-        const prediction = result as Record<string, unknown>;
-        const scores = await axMultiMetric({ prediction, example });
-        const { input, expectedOutput, modelOutput } = splitExample(example, prediction);
-        runs.push({ input, expectedOutput, modelOutput, score: scores });
-        for (const [name, val] of Object.entries(scores)) {
-          (allScores[name] ??= []).push(val);
-        }
-      } catch { /* skip */ }
-      onProgress?.();
-    }, { concurrency: EVAL_CONCURRENCY });
-
-    const score = Object.fromEntries(
-      Object.entries(allScores).map(([name, vals]) => [
-        name, vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0,
-      ]),
-    );
-    return { score, runs };
-  }
-
-  const axMetric = adaptSingleMetric(definition);
-  const scores: number[] = [];
-
-  await pMap(testExamples, async (example) => {
-    try {
-      const result = await program.forward(ai, example);
-      const prediction = result as Record<string, unknown>;
-      const s = await axMetric({ prediction, example });
-      const { input, expectedOutput, modelOutput } = splitExample(example, prediction);
-      runs.push({ input, expectedOutput, modelOutput, score: s });
-      scores.push(s);
-    } catch { /* skip */ }
-    onProgress?.();
-  }, { concurrency: EVAL_CONCURRENCY });
-
-  const score = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-  return { score, runs };
+  if (result == null) return ['default'];
+  return Object.keys(result);
 }

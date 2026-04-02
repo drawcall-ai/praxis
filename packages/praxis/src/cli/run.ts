@@ -70,7 +70,10 @@ export async function handleRun(opts: { definition?: string; config?: string }, 
     spinner.stop();
     console.log(JSON.stringify(output, null, 2));
     if (score != null) {
-      console.log(`\n  ${dim('score:')} ${score}`);
+      const scoreStr = typeof score === 'object'
+        ? Object.entries(score).map(([k, v]) => `${k}: ${v}`).join(', ')
+        : String(score);
+      console.log(`\n  ${dim('score:')} ${scoreStr}`);
     }
   } catch (err: unknown) {
     spinner.fail('Generation failed');

@@ -4,7 +4,7 @@
 
 [![npm version](https://img.shields.io/npm/v/@drawcall/praxis)](https://www.npmjs.com/package/@drawcall/praxis)
 
-**Praxis** turns a schema + examples into an optimized LLM prompt. You define the task, Praxis finds the best prompt automatically using [AX](https://axllm.dev) (TypeScript DSPy), and you get a portable `model.config.json` that works with any LLM.
+**Praxis** turns a schema + examples into an optimized LLM prompt. You define the task, Praxis finds the best prompt automatically using an agentic optimizer that diagnoses failures and iterates, and you get a portable `model.config.json` that works with any LLM.
 
 ## Install
 
@@ -32,7 +32,7 @@ export default defineModel({
   name: 'Sentiment Analyzer', // optional: human-readable label shown in the web UI
   student: 'google/gemini-3-flash-preview',
   version: '1.0', // optional: bump to trigger retraining when examples or metrics change
-  teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model for optimization
+  teacher: 'google/gemini-3.1-pro-preview', // optional: stronger model used as the optimizer agent
   description: 'Classify product review sentiment with confidence.', // optional: task description
 
   input: z.object({
@@ -53,7 +53,7 @@ export default defineModel({
 
   metric: ({ modelOutput, exampleOutput }) => {
     if (!exampleOutput) return null;
-    return modelOutput.sentiment === exampleOutput.sentiment ? 1 : 0;
+    return { accuracy: modelOutput.sentiment === exampleOutput.sentiment ? 1 : 0 };
   },
 });
 ```
@@ -68,9 +68,21 @@ Auto-discovers `model.definition.ts` (or `.js`) anywhere in the project via glob
 
 Training requires a metric and at least 10 examples — without it, Praxis generates a default instruction from the schema.
 
-Options: `--output, -o <path>` · `--optimizer <ace|gepa|auto>` · `--split <ratio>` · `--force`
+Options: `--output, -o <path>` · `--split <ratio>` · `--force`
 
 Training is skipped if the config is already up to date. If `version` is set in the definition, schema/student/teacher changes without a version bump produce an error — bump the version to retrain.
+
+#### How training works
+
+The optimizer is an agentic loop powered by the teacher model (or student if no teacher is set). It:
+
+1. Evaluates the default prompt on a held-out test set to establish a baseline
+2. Tests subsets of training examples, inspects failing inputs and the target model's reasoning
+3. Writes improved prompts that address the specific failure patterns it observes
+4. Iterates until satisfied, then confirms on the full test set
+5. Accepts the new prompt only if the combined score improves over baseline
+
+The agent has full creative freedom over the system prompt — it can include step-by-step algorithms, few-shot examples, lookup tables, edge case warnings, and more.
 
 ### 3. Build
 
@@ -103,7 +115,7 @@ npx praxis run --reviewText "Great product!"
 
 ## Multiple metrics
 
-Return a `Record<string, number>` from `metric` to evaluate on multiple dimensions. Praxis auto-selects the GEPA optimizer for multi-objective optimization:
+Return a `Record<string, number>` from `metric` to evaluate on multiple dimensions. Use optional `metricWeights` to control importance — if omitted, all metrics are weighted equally:
 
 ```ts
 export default defineModel({
@@ -133,6 +145,8 @@ export default defineModel({
       details: modelOutput.hasSpecificDetails === exampleOutput.hasSpecificDetails ? 1 : 0,
     };
   },
+
+  metricWeights: { quality: 0.5, sentiment: 0.3, details: 0.2 }, // optional
 });
 ```
 
@@ -164,7 +178,7 @@ export default defineModel({
 
   metric: ({ modelOutput, exampleOutput }) => {
     if (!exampleOutput) return null;
-    return modelOutput.label === exampleOutput.label ? 1 : 0;
+    return { accuracy: modelOutput.label === exampleOutput.label ? 1 : 0 };
   },
 });
 ```
@@ -200,12 +214,10 @@ export default defineModel({
   examples: [
     { input: { text: 'A long article about climate change...' } },
     { input: { text: 'Breaking news: new discovery in physics...' } },
-    // no output needed — metric evaluates the prediction directly
   ],
 
   metric: ({ modelOutput }) => {
-    // Score based on output quality, not comparison to expected
-    return modelOutput.summary.length > 10 && modelOutput.summary.length < 200 ? 1 : 0;
+    return { quality: modelOutput.summary.length > 10 && modelOutput.summary.length < 200 ? 1 : 0 };
   },
 });
 ```
@@ -239,10 +251,11 @@ pnpm --filter @drawcall/example-review-quality dev
 ## Features
 
 - **Schema-driven** — Define inputs and outputs with Zod, get type-safe results
-- **Automatic optimization** — Finds the best prompt through systematic search
+- **Agentic optimization** — An AI agent diagnoses failures, inspects model reasoning, and writes targeted prompt improvements
 - **Portable output** — `model.config.json` works with any LLM provider via OpenRouter
 - **Works without training** — Definitions alone produce results; training makes them better
-- **Single or multi-metric** — Return a `number` for one score, or a `Record<string, number>` for multi-objective optimization
+- **Multi-metric with weights** — Return a `Record<string, number>` with optional `metricWeights` for weighted optimization
+- **Observable** — Every optimizer step is logged: agent thinking, prompt iterations, model reasoning
 - **CLI + code** — Run from the terminal or import into your app
 - **Agent-friendly** — Install as a skill and let your coding agent write definitions
 

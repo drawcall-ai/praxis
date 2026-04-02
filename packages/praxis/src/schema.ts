@@ -4,6 +4,7 @@ import type { PraxisConfigSchema, JsonSchema } from './types.js';
 interface SchemaSource {
   input: z.ZodObject<z.ZodRawShape>;
   output: z.ZodObject<z.ZodRawShape>;
+  description?: string;
 }
 
 /**
@@ -18,7 +19,6 @@ export function serializeSchema(source: SchemaSource): PraxisConfigSchema {
 
 /**
  * Validate that a Zod schema matches the JSON Schema stored in a config.
- * Throws a descriptive error if they differ.
  */
 export function validateSchema(
   zodSchema: z.ZodObject<z.ZodRawShape>,
@@ -38,21 +38,24 @@ export function validateSchema(
 }
 
 /**
- * Convert a definition's schemas to an AX signature string.
- * e.g. 'reviewText:string "desc" -> sentiment:class "positive,negative,neutral" "desc"'
+ * Format the input/output schema for inclusion in a system prompt.
+ * Produces a human-readable description of each field.
  */
-export function toAxSignature(source: SchemaSource): string {
-  const inputParts = zodObjectToAxFields(source.input);
-  const outputParts = zodObjectToAxFields(source.output);
-  return `${inputParts.join(', ')} -> ${outputParts.join(', ')}`;
-}
+export function formatSchemaForPrompt(source: SchemaSource): string {
+  const lines: string[] = [];
 
-function zodObjectToAxFields(obj: z.ZodObject<z.ZodRawShape>): string[] {
-  const fields: string[] = [];
-  for (const [key, zodType] of Object.entries(obj.shape)) {
-    fields.push(zodTypeToAxField(key, zodType as z.ZodTypeAny));
+  lines.push('Input:');
+  for (const [key, zodType] of Object.entries(source.input.shape)) {
+    lines.push(`  ${key}: ${describeZodType(zodType as z.ZodTypeAny)}`);
   }
-  return fields;
+
+  lines.push('');
+  lines.push('Output (respond as JSON):');
+  for (const [key, zodType] of Object.entries(source.output.shape)) {
+    lines.push(`  ${key}: ${describeZodType(zodType as z.ZodTypeAny)}`);
+  }
+
+  return lines.join('\n');
 }
 
 interface ZodDef {
@@ -61,29 +64,28 @@ interface ZodDef {
   entries?: Record<string, string>;
 }
 
-function zodTypeToAxField(name: string, zodType: z.ZodTypeAny): string {
+function describeZodType(zodType: z.ZodTypeAny): string {
   const description = zodType.description;
   const def = (zodType as unknown as { def: ZodDef }).def;
   const defType = def.type;
 
   if (defType === 'optional' || defType === 'nullable' || defType === 'default') {
-    return zodTypeToAxField(name, def.innerType as z.ZodTypeAny);
+    return describeZodType(def.innerType as z.ZodTypeAny);
   }
 
-  let axType: string;
-
+  let typeStr: string;
   if (defType === 'enum') {
-    axType = `class "${Object.keys(def.entries as Record<string, string>).join(',')}"`;
+    const values = Object.keys(def.entries as Record<string, string>);
+    typeStr = values.map((v) => `"${v}"`).join(' | ');
   } else if (defType === 'number') {
-    axType = 'number';
+    typeStr = 'number';
   } else if (defType === 'boolean') {
-    axType = 'boolean';
+    typeStr = 'boolean';
   } else if (defType === 'array') {
-    axType = 'string[]';
+    typeStr = 'array';
   } else {
-    axType = 'string';
+    typeStr = 'string';
   }
 
-  const desc = description ? ` "${description}"` : '';
-  return `${name}:${axType}${desc}`;
+  return description ? `${typeStr} — ${description}` : typeStr;
 }

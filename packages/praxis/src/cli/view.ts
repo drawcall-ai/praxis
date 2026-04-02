@@ -873,39 +873,34 @@ function buildHTML(): string {
       addStat('graduation-cap', 'Teacher', shortTeacher);
     }
 
-    // Trained-only: scores + optimizer
+    // Trained-only: scores
     if (trained) {
-      // Train score
-      if (typeof opt.bestScore === 'number') {
-        const cls = opt.bestScore >= 0.8 ? 'good' : opt.bestScore >= 0.5 ? 'warn' : 'bad';
-        addStat('target', 'Train', opt.bestScore.toFixed(2), cls);
-      } else if (typeof opt.bestScore === 'object') {
+      // Best score
+      if (opt.bestScore && typeof opt.bestScore === 'object') {
         const vals = Object.values(opt.bestScore);
-        const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
+        const avg = vals.length > 0 ? vals.reduce((a,b) => a+b, 0) / vals.length : 0;
         const cls = avg >= 0.8 ? 'good' : avg >= 0.5 ? 'warn' : 'bad';
-        addStat('target', 'Train', avg.toFixed(2), cls);
+        const label = Object.entries(opt.bestScore).map(([k,v]) => k + ': ' + v.toFixed(2)).join(', ');
+        addStat('target', 'Score', avg.toFixed(2), cls);
       }
 
       // Test score (computed from eval runs)
       const evalRuns = opt.evalRuns || [];
       if (evalRuns.length > 0) {
-        const firstScore = evalRuns[0].score;
-        let testAvg;
-        if (typeof firstScore === 'number') {
-          const scores = evalRuns.map(r => r.score);
-          testAvg = scores.reduce((a, b) => a + b, 0) / scores.length;
-        } else {
-          const perRun = evalRuns.map(r => {
-            const vals = Object.values(r.score);
-            return vals.reduce((a, b) => a + b, 0) / vals.length;
-          });
-          testAvg = perRun.reduce((a, b) => a + b, 0) / perRun.length;
-        }
+        const perRun = evalRuns.map(r => {
+          if (!r.score || typeof r.score !== 'object') return 0;
+          const vals = Object.values(r.score);
+          return vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : 0;
+        });
+        const testAvg = perRun.reduce((a, b) => a + b, 0) / perRun.length;
         const cls = testAvg >= 0.8 ? 'good' : testAvg >= 0.5 ? 'warn' : 'bad';
         addStat('flask-conical', 'Test', testAvg.toFixed(2), cls);
       }
 
-      addStat('settings', 'Optimizer', opt.optimizer.toUpperCase());
+      // Stats info
+      if (opt.stats?.agentSteps) {
+        addStat('settings', 'Steps', String(opt.stats.agentSteps));
+      }
     }
 
     // Show/hide trained-only section tabs
@@ -952,17 +947,13 @@ function buildHTML(): string {
       html += '</tr></thead><tbody>';
 
       runs.forEach((run, i) => {
-        const score = run.score;
-        let scoreStr, badgeCls;
-        if (typeof score === 'number') {
-          scoreStr = score.toFixed(2);
-          badgeCls = score >= 1 ? 'pass' : score > 0 ? 'partial' : 'fail';
-        } else {
-          const vals = Object.values(score);
-          const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
-          scoreStr = Object.entries(score).map(([k,v]) => k + ':' + v.toFixed(1)).join(' ');
-          badgeCls = avg >= 1 ? 'pass' : avg > 0 ? 'partial' : 'fail';
-        }
+        const score = run.score || {};
+        const vals = typeof score === 'object' ? Object.values(score) : [score];
+        const avg = vals.length > 0 ? vals.reduce((a,b) => a+b, 0) / vals.length : 0;
+        const scoreStr = typeof score === 'object'
+          ? Object.entries(score).map(([k,v]) => k + ':' + (typeof v === 'number' ? v.toFixed(1) : v)).join(' ')
+          : String(score);
+        const badgeCls = avg >= 1 ? 'pass' : avg > 0 ? 'partial' : 'fail';
 
         const summaryVal = String(run.input[summaryKey] ?? '');
 
@@ -1111,13 +1102,10 @@ function buildHTML(): string {
     }
 
     // Score
-    const score = run.score;
-    let scoreStr;
-    if (typeof score === 'number') {
-      scoreStr = score.toFixed(2);
-    } else {
-      scoreStr = Object.entries(score).map(([k,v]) => k + ': ' + v.toFixed(2)).join(', ');
-    }
+    const score = run.score || {};
+    const scoreStr = typeof score === 'object'
+      ? Object.entries(score).map(([k,v]) => k + ': ' + (typeof v === 'number' ? v.toFixed(2) : v)).join(', ')
+      : String(score);
     html += '<div class="modal-section" style="margin-top:24px"><div class="modal-section-title">Score</div>';
     html += '<div class="modal-field-value">' + scoreStr + '</div></div>';
 
