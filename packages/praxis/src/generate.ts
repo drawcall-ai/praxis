@@ -48,6 +48,7 @@ export async function generateText<I extends z.ZodRawShape, O extends z.ZodRawSh
     model,
     messages: prompt.messages,
     output: Output.object({ schema: prompt.schema.output }),
+    ...(config?.optimization.temperature != null ? { temperature: config.optimization.temperature } : {}),
   });
 
   const object = result.output as z.infer<z.ZodObject<O>>;

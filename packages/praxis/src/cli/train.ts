@@ -21,10 +21,11 @@ import {
   resolveDefinitionPath, requireEnvKey, loadDefinition,
   validateDefinition, formatZodSchema,
 } from './utils.js';
+import { formatTable } from '../format.js';
 
-const EVAL_CONCURRENCY = 10;
+const EVAL_CONCURRENCY = 20;
 const MAX_TEST_PER_CALL = 20;
-const MAX_AGENT_STEPS = 20;
+const MAX_AGENT_STEPS = 40;
 
 // ── CLI handler ────────────────────────────────────────────────────────
 
@@ -237,16 +238,16 @@ async function train(
   function formatCompactTable(results: EvalResult[]): string {
     if (results.length === 0) return '(no results)';
 
-    const headerCols = metricKeys.map((k) => {
-      const w = weights?.[k];
-      return w != null ? `${k} (${w})` : k;
-    });
-    headerCols.push('combinedScore');
+    const columns = [
+      'Examples',
+      ...metricKeys.map((k) => {
+        const w = weights?.[k];
+        return w != null ? `${k} (${w})` : k;
+      }),
+      'combinedScore',
+    ];
 
-    const header = `| Examples | ${headerCols.join(' | ')} |`;
-    const sep = `|----------|${headerCols.map(() => '---').join('|')}|`;
-
-    const rows: string[] = [];
+    const rows: string[][] = [];
     let rangeStart = results[0].id;
     let rangeEnd = rangeStart;
     let currentScore = results[0].score;
@@ -255,7 +256,7 @@ async function train(
       const label = start === end ? `#${start}` : `#${start}-#${end}`;
       const vals = metricKeys.map((k) => String(score[k] ?? 0));
       vals.push(computeCombinedScore(score, weights).toFixed(2));
-      rows.push(`| ${label} | ${vals.join(' | ')} |`);
+      rows.push([label, ...vals]);
     }
 
     function scoresEqual(a: Record<string, number>, b: Record<string, number>) {
@@ -276,7 +277,7 @@ async function train(
       }
     }
 
-    return [header, sep, ...rows].join('\n');
+    return formatTable(columns, rows);
   }
 
   function summarize(results: EvalResult[]): string {
@@ -348,7 +349,7 @@ The current prompt is just a starting point. You have full creative freedom.
 
 - **write_prompt(promptName, promptContent)**: update the system prompt
 - **test_examples(ids)**: run up to ${MAX_TEST_PER_CALL} examples. Returns a runId + compact score table.
-- **view_input(exampleIds)**: view raw input text + expected answer. Inputs are static across runs.
+- **view_input(exampleIds)**: view raw input text for specific examples. Inputs are static across runs.
 - **view_output(runId, exampleIds)**: view predictions, scores, AND the target model's internal reasoning/thoughts. Use this to see HOW the model reasoned and where its logic breaks down.
 - **set_temperature(temperature)**: set the target model's temperature (default 0).
 
@@ -442,31 +443,29 @@ Start by testing a batch of examples, then use view_input and view_output to und
       }),
 
       view_input: tool({
-        description: 'View the input text and expected output for specific training examples. Inputs are static across runs.',
+        description: 'View input fields for specific training examples as a compact table. Inputs are static across runs.',
         inputSchema: z.object({
           exampleIds: z.array(z.number()).describe('Example indices to view'),
         }),
         execute: async ({ exampleIds }) => {
-          const rows = exampleIds
-            .filter((id) => trainExamples[id] != null)
-            .map((id) => {
-              const ex = trainExamples[id];
-              const input = Object.entries(ex.input as Record<string, unknown>)
-                .map(([k, v]) => `  ${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
-                .join('\n');
-              const output = ex.output
-                ? Object.entries(ex.output as Record<string, unknown>)
-                    .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-                    .join(', ')
-                : '(none)';
-              return `## Example #${id}\n${input}\nExpected: ${output}`;
+          const valid = exampleIds.filter((id) => trainExamples[id] != null);
+          if (valid.length === 0) return 'No matching examples found.';
+
+          const inputKeys = Object.keys(trainExamples[valid[0]].input as Record<string, unknown>);
+          const rows = valid.map((id) => {
+            const input = trainExamples[id].input as Record<string, unknown>;
+            const vals = inputKeys.map((k) => {
+              const v = input[k];
+              return typeof v === 'string' ? v : JSON.stringify(v);
             });
-          return rows.length > 0 ? rows.join('\n\n') : 'No matching examples found.';
+            return [String(id), ...vals];
+          });
+          return formatTable(['#', ...inputKeys], rows);
         },
       }),
 
       view_output: tool({
-        description: "View predictions, scores, and the target model's internal reasoning for specific examples from a previous run.",
+        description: "View predictions, scores, and the target model's internal reasoning for specific examples from a previous run. Returns a compact table + reasoning.",
         inputSchema: z.object({
           runId: z.string().describe('The runId from a previous test_examples call'),
           exampleIds: z.array(z.number()).describe('Example indices to view'),
@@ -481,14 +480,23 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
           if (requested.length === 0) return 'No matching examples found.';
 
-          return requested.map((r) => {
-            const status = computeCombinedScore(r.score, weights) >= 1 ? 'CORRECT' : 'WRONG';
-            const scoreStr = Object.entries(r.score).map(([k, v]) => `${k}: ${v}`).join(', ');
-            const outputStr = Object.entries(r.modelOutput).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
-            let section = `## Example #${r.id} — ${status}\nPrediction: ${outputStr}\nScore: ${scoreStr}`;
-            if (r.reasoning) section += `\n\nModel's reasoning:\n${r.reasoning}`;
-            return section;
-          }).join('\n\n---\n\n');
+          const outputKeys = Object.keys(requested[0].modelOutput);
+          const columns = ['#', 'status', ...outputKeys, ...metricKeys];
+          const rows = requested.map((r) => {
+            const status = computeCombinedScore(r.score, weights) >= 1 ? 'OK' : 'FAIL';
+            const outVals = outputKeys.map((k) => JSON.stringify(r.modelOutput[k] ?? ''));
+            const scoreVals = metricKeys.map((k) => String(r.score[k] ?? 0));
+            return [String(r.id), status, ...outVals, ...scoreVals];
+          });
+          const table = formatTable(columns, rows);
+
+          const reasonings = requested
+            .filter((r) => r.reasoning)
+            .map((r) => `#${r.id}: ${r.reasoning}`);
+
+          return reasonings.length > 0
+            ? `${table}\n\n${reasonings.join('\n\n')}`
+            : table;
         },
       }),
 
@@ -549,6 +557,7 @@ Start by testing a batch of examples, then use view_input and view_output to und
       schema: serializeSchema(definition),
       optimization: {
         instruction: acceptedPrompt,
+        ...(currentTemperature !== 0 ? { temperature: currentTemperature } : {}),
         bestScore: acceptedScores,
         evalRuns,
         stats: {

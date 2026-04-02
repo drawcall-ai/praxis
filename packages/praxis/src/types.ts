@@ -66,6 +66,7 @@ export interface ModelConfig {
   schema: PraxisConfigSchema;
   optimization: {
     instruction: string;
+    temperature?: number;
     bestScore: Record<string, number>;
     evalRuns?: PraxisEvalRun[];
     stats?: Record<string, unknown>;
