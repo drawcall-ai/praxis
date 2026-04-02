@@ -902,6 +902,11 @@ function buildHTML(): string {
         addStat('thermometer', 'Temp', String(opt.temperature));
       }
 
+      // Reasoning effort
+      if (opt.reasoningEffort != null) {
+        addStat('brain', 'Reasoning', opt.reasoningEffort);
+      }
+
       // Stats info
       if (opt.stats?.agentSteps) {
         addStat('settings', 'Steps', String(opt.stats.agentSteps));

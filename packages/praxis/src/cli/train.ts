@@ -10,11 +10,12 @@ import { detectMismatches } from '../validate.js';
 import { computeCombinedScore } from '../types.js';
 import type {
   ModelDefinition,
-  ModelExample,
   ModelConfig,
   PraxisEvalRun,
   TrainOptions,
 } from '../types.js';
+import { resolveExamples } from '../examples.js';
+import type { ExampleProvider } from '../examples.js';
 import {
   DEFAULT_CONFIG,
   bold, dim, green,
@@ -71,19 +72,16 @@ export async function handleTrain(opts: { definition?: string; output?: string; 
     }
   }
 
-  const resolvedExamples = Array.isArray(definition.examples)
-    ? definition.examples
-    : await definition.examples();
-  const resolvedDef = { ...definition, examples: resolvedExamples };
+  const provider = await resolveExamples(definition.examples);
 
   console.log('');
   const teacherLabel = definition.teacher ? ` · teacher: ${definition.teacher}` : '';
-  console.log(`  ${bold(definition.student)} ${dim(`${resolvedExamples.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
+  console.log(`  ${bold(definition.student)} ${dim(`${provider.length} examples · ${options.split}/${(1 - options.split).toFixed(1)} split${teacherLabel}`)}`);
   console.log('');
   console.log(formatZodSchema(definition));
   console.log('');
 
-  const { config, testScore } = await train(resolvedDef, options);
+  const { config, testScore } = await train(definition, provider, options);
 
   await writeFile(options.output, JSON.stringify(config, null, 2));
 
@@ -117,36 +115,36 @@ interface EvalResult {
 
 async function train(
   definition: ModelDefinition,
+  provider: ExampleProvider,
   options: Pick<TrainOptions, 'split'>,
 ): Promise<TrainResult> {
   const { student } = definition;
   const startTime = Date.now();
   const elapsed = () => dim(`${((Date.now() - startTime) / 1000).toFixed(0)}s`);
 
-  if (!Array.isArray(definition.examples)) {
-    throw new Error('train() expects resolved examples. Use resolveExamples() first.');
-  }
-  const examples = definition.examples;
-
-  if (examples.length < 10) {
-    throw new Error(`At least 10 examples required, got ${examples.length}`);
+  if (provider.length < 10) {
+    throw new Error(`At least 10 examples required, got ${provider.length}`);
   }
 
   if (!definition.metric) {
     throw new Error('Definition must export a "metric" function');
   }
 
-  const metricKeys = probeMetricKeys(definition, examples);
+  const metricKeys = await probeMetricKeys(definition, provider);
   const weights = definition.metricWeights;
 
-  // ── Train/test split ─────────────────────────────────────────────
-  const shuffled = [...examples].sort(() => Math.random() - 0.5);
-  const testCount = Math.min(Math.round(shuffled.length * (1 - options.split)), 50);
-  const splitIdx = shuffled.length - testCount;
-  const trainExamples = shuffled.slice(0, splitIdx);
-  const testExamples = shuffled.slice(splitIdx);
+  // ── Train/test split (index-based, no full materialization) ─────
+  const indices = [...Array(provider.length).keys()];
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+  const testCount = Math.min(Math.round(provider.length * (1 - options.split)), 50);
+  const splitIdx = provider.length - testCount;
+  const trainIndices = indices.slice(0, splitIdx);
+  const testIndices = indices.slice(splitIdx);
 
-  console.log(`  ${dim(`${trainExamples.length} train / ${testExamples.length} test`)}`);
+  console.log(`  ${dim(`${trainIndices.length} train / ${testIndices.length} test`)}`);
   console.log(`  ${dim(`metric keys: ${metricKeys.join(', ')}`)}`);
   if (weights) console.log(`  ${dim(`weights: ${JSON.stringify(weights)}`)}`);
 
@@ -164,14 +162,14 @@ async function train(
 
   let currentPrompt = buildDefaultSystemPrompt(definition);
   let currentTemperature = 0;
+  let currentReasoningEffort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' = 'minimal';
 
   async function evaluate(
     systemPrompt: string,
-    exampleSet: ModelExample[],
-    ids: number[],
+    exampleIndices: number[],
   ): Promise<{ runId: string; results: EvalResult[] }> {
     const runId = nextRunId();
-    const validIds = ids.filter((id) => exampleSet[id] != null);
+    const validIds = exampleIndices.filter((id) => id >= 0 && id < provider.length);
     const resultMap = new Map<number, EvalResult>();
 
     const model = wrapLanguageModel({
@@ -180,7 +178,7 @@ async function train(
     });
 
     await pMap(validIds, async (id) => {
-      const ex = exampleSet[id];
+      const ex = await provider.get(id);
       const input = ex.input as Record<string, unknown>;
       const userContent = Object.entries(input)
         .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
@@ -193,7 +191,7 @@ async function train(
           output: Output.object({ schema: definition.output }),
           temperature: currentTemperature,
           providerOptions: {
-            openrouter: { reasoning: { effort: 'low', exclude: false } },
+            openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
           },
         });
         const modelOutput = (result.output ?? {}) as Record<string, unknown>;
@@ -303,16 +301,9 @@ async function train(
     return avg;
   }
 
-  // ── Baseline eval on test set ────────────────────────────────────
-  console.log(`  Evaluating baseline on test set... ${elapsed()}`);
-  const allTestIds = testExamples.map((_, i) => i);
-  const baselineTest = await evaluate(currentPrompt, testExamples, allTestIds);
-  const baselineTestScores = avgScores(baselineTest.results);
-  const baselineCombined = computeCombinedScore(baselineTestScores, weights);
-  console.log(`  ${green('✓')} Baseline (test): ${summarize(baselineTest.results)} ${elapsed()}`);
+  const baselinePrompt = currentPrompt;
 
   // ── Agent system prompt ──────────────────────────────────────────
-  const allTrainIds = trainExamples.map((_, i) => i);
 
   const schemaDesc = formatSchemaForPrompt(definition);
   const metricDesc = metricKeys.length === 1 && metricKeys[0] === 'default'
@@ -352,6 +343,7 @@ The current prompt is just a starting point. You have full creative freedom.
 - **view_input(exampleIds)**: view raw input text for specific examples. Inputs are static across runs.
 - **view_output(runId, exampleIds)**: view predictions, scores, AND the target model's internal reasoning/thoughts. Use this to see HOW the model reasoned and where its logic breaks down.
 - **set_temperature(temperature)**: set the target model's temperature (default 0).
+- **set_reasoning_effort(level)**: set the target model's reasoning effort: minimal, low, medium, high, or xhigh (default minimal).
 
 ## MANDATORY workflow — you MUST follow these steps in order:
 
@@ -364,7 +356,7 @@ The current prompt is just a starting point. You have full creative freedom.
 
 NEVER write a prompt without first looking at actual examples and model reasoning via view_input and view_output.`;
 
-  const userMessage = `You have ${trainExamples.length} training examples available (indices 0-${trainExamples.length - 1}).
+  const userMessage = `You have ${trainIndices.length} training examples available (indices 0-${trainIndices.length - 1}).
 
 ## Current System Prompt
 \`\`\`
@@ -392,7 +384,7 @@ Start by testing a batch of examples, then use view_input and view_output to und
     system: agentSystemPrompt,
     prompt: userMessage,
     providerOptions: {
-      openrouter: { reasoning: { effort: 'high', exclude: false } },
+      openrouter: { reasoning: { effort: 'xhigh', exclude: false } },
     },
     onStepFinish({ stepNumber, text, toolCalls, reasoning, finishReason }) {
       const tools = toolCalls?.length ? ` → ${toolCalls.map((tc) => tc.toolName).join(', ')}` : '';
@@ -433,12 +425,17 @@ Start by testing a batch of examples, then use view_input and view_output to und
           if (ids.length > MAX_TEST_PER_CALL) {
             return `Error: requested ${ids.length} examples but max is ${MAX_TEST_PER_CALL}. Pick a smaller subset.`;
           }
-          console.log(`  ${dim(`[test_examples] ${ids.length} example(s)...`)}`);
-          const { runId, results } = await evaluate(currentPrompt, trainExamples, ids);
-          console.log(`  ${dim(`[test_examples] ${runId}: ${summarize(results)}`)}`);
-          const table = formatCompactTable(results);
-          const failed = results.filter((r) => computeCombinedScore(r.score, weights) < 1).map((r) => r.id);
-          return `${runId} — ${summarize(results)}\n${table}\n\nFailed IDs: ${failed.length > 0 ? failed.join(', ') : 'none'}`;
+          const globalIds = ids.filter((id) => id >= 0 && id < trainIndices.length).map((id) => trainIndices[id]);
+          console.log(`  ${dim(`[test_examples] ${globalIds.length} example(s)...`)}`);
+          const { runId, results } = await evaluate(currentPrompt, globalIds);
+          // Remap global IDs back to local for the agent
+          const localResults = results.map((r, i) => ({ ...r, id: ids[i] }));
+          const localRunId = runId;
+          runs.set(localRunId, localResults);
+          console.log(`  ${dim(`[test_examples] ${runId}: ${summarize(localResults)}`)}`);
+          const table = formatCompactTable(localResults);
+          const failed = localResults.filter((r) => computeCombinedScore(r.score, weights) < 1).map((r) => r.id);
+          return `${localRunId} — ${summarize(localResults)}\n${table}\n\nFailed IDs: ${failed.length > 0 ? failed.join(', ') : 'none'}`;
         },
       }),
 
@@ -448,18 +445,20 @@ Start by testing a batch of examples, then use view_input and view_output to und
           exampleIds: z.array(z.number()).describe('Example indices to view'),
         }),
         execute: async ({ exampleIds }) => {
-          const valid = exampleIds.filter((id) => trainExamples[id] != null);
+          const valid = exampleIds.filter((id) => id >= 0 && id < trainIndices.length);
           if (valid.length === 0) return 'No matching examples found.';
 
-          const inputKeys = Object.keys(trainExamples[valid[0]].input as Record<string, unknown>);
-          const rows = valid.map((id) => {
-            const input = trainExamples[id].input as Record<string, unknown>;
+          const firstEx = await provider.get(trainIndices[valid[0]]);
+          const inputKeys = Object.keys(firstEx.input as Record<string, unknown>);
+          const rows = await Promise.all(valid.map(async (id) => {
+            const ex = await provider.get(trainIndices[id]);
+            const input = ex.input as Record<string, unknown>;
             const vals = inputKeys.map((k) => {
               const v = input[k];
               return typeof v === 'string' ? v : JSON.stringify(v);
             });
             return [String(id), ...vals];
-          });
+          }));
           return formatTable(['#', ...inputKeys], rows);
         },
       }),
@@ -511,6 +510,18 @@ Start by testing a batch of examples, then use view_input and view_output to und
           return `Temperature set to ${temperature}.`;
         },
       }),
+
+      set_reasoning_effort: tool({
+        description: 'Set the reasoning effort level for the target model (default minimal).',
+        inputSchema: z.object({
+          level: z.enum(['minimal', 'low', 'medium', 'high', 'xhigh']).describe('Reasoning effort level'),
+        }),
+        execute: async ({ level }) => {
+          currentReasoningEffort = level;
+          console.log(`  ${dim(`[set_reasoning_effort] ${level}`)}`);
+          return `Reasoning effort set to ${level}.`;
+        },
+      }),
     },
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
   });
@@ -521,12 +532,18 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
   console.log(`  ${green('✓')} Agent finished (${steps.length} steps) ${elapsed()}`);
 
-  // ── Final eval on test set ───────────────────────────────────────
-  console.log(`  Evaluating final prompt on test set... ${elapsed()}`);
-  const finalTest = await evaluate(currentPrompt, testExamples, allTestIds);
+  // ── Eval both baseline & final on test set in parallel (same reasoning effort) ──
+  console.log(`  Evaluating baseline & final on test set... ${elapsed()}`);
+  const [baselineTest, finalTest] = await Promise.all([
+    evaluate(baselinePrompt, testIndices),
+    evaluate(currentPrompt, testIndices),
+  ]);
+  const baselineTestScores = avgScores(baselineTest.results);
+  const baselineCombined = computeCombinedScore(baselineTestScores, weights);
+  console.log(`  ${green('✓')} Baseline (test): ${summarize(baselineTest.results)} ${elapsed()}`);
   const finalTestScores = avgScores(finalTest.results);
   const finalCombined = computeCombinedScore(finalTestScores, weights);
-  console.log(`  Final (test): ${summarize(finalTest.results)} ${elapsed()}`);
+  console.log(`  ${green('✓')} Final (test): ${summarize(finalTest.results)} ${elapsed()}`);
 
   // ── Acceptance check ─────────────────────────────────────────────
   let acceptedPrompt = currentPrompt;
@@ -534,7 +551,7 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
   if (finalCombined < baselineCombined) {
     console.log(`  ${dim('Final combinedScore regressed — keeping baseline prompt.')}`);
-    acceptedPrompt = buildDefaultSystemPrompt(definition);
+    acceptedPrompt = baselinePrompt;
     acceptedScores = baselineTestScores;
   } else {
     const improvement = ((finalCombined - baselineCombined) * 100).toFixed(1);
@@ -558,6 +575,7 @@ Start by testing a batch of examples, then use view_input and view_output to und
       optimization: {
         instruction: acceptedPrompt,
         ...(currentTemperature !== 0 ? { temperature: currentTemperature } : {}),
+        ...(currentReasoningEffort !== 'minimal' ? { reasoningEffort: currentReasoningEffort } : {}),
         bestScore: acceptedScores,
         evalRuns,
         stats: {
@@ -575,9 +593,9 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-function probeMetricKeys(def: ModelDefinition, examples: ModelExample[]): string[] {
-  const example = examples[0];
-  if (!example || !def.metric) return ['default'];
+async function probeMetricKeys(def: ModelDefinition, provider: ExampleProvider): Promise<string[]> {
+  if (provider.length === 0 || !def.metric) return ['default'];
+  const example = await provider.get(0);
   const result = def.metric({
     input: example.input as Record<string, unknown>,
     modelOutput: (example.output ?? {}) as Record<string, unknown>,

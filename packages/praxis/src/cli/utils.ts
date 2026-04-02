@@ -109,8 +109,9 @@ export function validateDefinition(def: ModelDefinition, requireMetric: boolean)
   if (!def.student || typeof def.student !== 'string')
     throw new Error('Definition must export a "student" string');
   const ex = def.examples;
-  if (!Array.isArray(ex) && typeof ex !== 'function')
-    throw new Error('Definition must export "examples" as an array or async function');
+  const isLazyProvider = ex != null && typeof ex === 'object' && !Array.isArray(ex) && typeof (ex as any).getLength === 'function' && typeof (ex as any).getExample === 'function';
+  if (!Array.isArray(ex) && typeof ex !== 'function' && !isLazyProvider)
+    throw new Error('Definition must export "examples" as an array, async function, or { getLength, getExample } provider');
   if (requireMetric && !def.metric)
     throw new Error('Definition must export a "metric" function');
 }

@@ -20,12 +20,21 @@ export type ModelMetricFn<
   exampleOutput?: z.infer<z.ZodObject<O>>;
 }) => Record<string, number> | null | undefined;
 
+export interface LazyExampleProvider<
+  I extends z.ZodRawShape = z.ZodRawShape,
+  O extends z.ZodRawShape = z.ZodRawShape,
+> {
+  getLength: () => Promise<number>;
+  getExample: (index: number) => Promise<ModelExample<I, O>>;
+}
+
 export type ModelExamples<
   I extends z.ZodRawShape = z.ZodRawShape,
   O extends z.ZodRawShape = z.ZodRawShape,
 > =
   | ModelExample<I, O>[]
-  | (() => Promise<ModelExample<I, O>[]>);
+  | (() => Promise<ModelExample<I, O>[]>)
+  | LazyExampleProvider<I, O>;
 
 export interface ModelDefinition<
   I extends z.ZodRawShape = z.ZodRawShape,
@@ -67,6 +76,7 @@ export interface ModelConfig {
   optimization: {
     instruction: string;
     temperature?: number;
+    reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     bestScore: Record<string, number>;
     evalRuns?: PraxisEvalRun[];
     stats?: Record<string, unknown>;
