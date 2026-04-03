@@ -77,10 +77,10 @@ describe('buildRequest', () => {
     expect(req.messages[0].content).toBe(trainedConfig.optimization.instruction);
   });
 
-  it('formats user input as key-value pairs', () => {
+  it('formats user input as JSON', () => {
     const req = buildRequest(definition, { reviewText: 'Great product!' });
     const userMsg = req.messages.find((m) => m.role === 'user');
-    expect(userMsg?.content).toContain('reviewText: Great product!');
+    expect(JSON.parse(userMsg?.content as string)).toEqual({ reviewText: 'Great product!' });
   });
 
   it('produces system + user message structure', () => {

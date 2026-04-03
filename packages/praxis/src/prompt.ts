@@ -30,9 +30,7 @@ export function buildRequest<I extends z.ZodRawShape, O extends z.ZodRawShape>(
 ): ModelRequest<O> {
   const system = config?.optimization.instruction || buildDefaultSystemPrompt(definition);
 
-  const userContent = Object.entries(input as Record<string, unknown>)
-    .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-    .join('\n');
+  const userContent = JSON.stringify(input);
 
   const messages: ModelMessage[] = [
     { role: 'system', content: system },

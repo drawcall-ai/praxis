@@ -209,9 +209,7 @@ async function train(
     await pMap(validIds, async (id) => {
       const ex = await provider.get(id);
       const input = ex.input as Record<string, unknown>;
-      const userContent = Object.entries(input)
-        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-        .join('\n');
+      const userContent = JSON.stringify(input);
       const generateArgs = {
         model,
         system: systemPrompt,
