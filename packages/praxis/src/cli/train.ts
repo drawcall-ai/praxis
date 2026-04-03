@@ -4,6 +4,7 @@ import { generateText as aiGenerateText, Output, tool, wrapLanguageModel, extrac
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { z } from 'zod';
 import pMap from 'p-map';
+import pRetry from 'p-retry';
 import { serializeSchema, formatSchemaForPrompt } from '../schema.js';
 import { buildDefaultSystemPrompt } from '../prompt.js';
 import { detectMismatches } from '../validate.js';
@@ -211,7 +212,7 @@ async function train(
       const userContent = Object.entries(input)
         .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
         .join('\n');
-      let result = await aiGenerateText({
+      const generateArgs = {
         model,
         system: systemPrompt,
         prompt: userContent,
@@ -220,26 +221,14 @@ async function train(
         providerOptions: {
           openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
         },
+      } as const;
+      const result = await pRetry(() => aiGenerateText(generateArgs), {
+        retries: 2,
+        onFailedAttempt(err: any) {
+          const reason = err.finishReason === 'length' ? 'token limit / repetition loop' : 'failed to parse';
+          console.log(`  ${dim(`[eval] example #${id} ${reason}, retrying (${err.attemptNumber}/${err.retriesLeft + err.attemptNumber})...`)}`);
+        },
       });
-      if (result.output == null && result.finishReason === 'length') {
-        console.log(`  ${dim(`[eval] example #${id} hit token limit (likely repetition loop), retrying...`)}`);
-        result = await aiGenerateText({
-          model,
-          system: systemPrompt,
-          prompt: userContent,
-          output: Output.object({ schema: definition.output }),
-          maxOutputTokens: definition.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-          providerOptions: {
-            openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
-          },
-        });
-      }
-      if (result.output == null) {
-        throw new Error(
-          `No output generated for example #${id} (finishReason: ${result.finishReason}). ` +
-          `Raw text: ${result.text?.slice(0, 500)}`,
-        );
-      }
       const modelOutput = result.output as Record<string, unknown>;
       let reasoning = '';
       if (typeof result.reasoning === 'string') {
