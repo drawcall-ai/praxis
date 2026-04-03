@@ -1,6 +1,6 @@
 import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
-import { generateText as aiGenerateText, NoObjectGeneratedError, Output, tool, wrapLanguageModel, extractJsonMiddleware } from 'ai';
+import { generateText as aiGenerateText, NoObjectGeneratedError, NoOutputGeneratedError, Output, tool, wrapLanguageModel, extractJsonMiddleware } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { z } from 'zod';
 import pMap from 'p-map';
@@ -222,7 +222,7 @@ async function train(
       } as const;
       const result = await pRetry(() => aiGenerateText(generateArgs), {
         retries: 2,
-        shouldRetry: (err) => err instanceof NoObjectGeneratedError,
+        shouldRetry: (err) => err instanceof NoObjectGeneratedError || err instanceof NoOutputGeneratedError,
         onFailedAttempt(err: any) {
           console.log(`  ${dim(`[eval] example #${id} failed (${err.message?.slice(0, 80)}), retry ${err.attemptNumber}/3...`)}`);
         },
