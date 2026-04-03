@@ -43,12 +43,13 @@
     "p-retry": "^8.0.0",
     "tinyglobby": "^0.2.15",
     "vite-node": "^6.0.0",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "zod-to-ts": "^2.0.0"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
     "tsup": "^8.0.0",
-    "typescript": "^5.7.0",
+    "typescript": "^5.9.3",
     "vite": "^8.0.0"
   },
   "engines": {

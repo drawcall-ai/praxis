@@ -14,11 +14,12 @@ export interface ModelExample<
 export type ModelMetricFn<
   I extends z.ZodRawShape = z.ZodRawShape,
   O extends z.ZodRawShape = z.ZodRawShape,
+  M extends string = string,
 > = (ctx: {
   input: z.infer<z.ZodObject<I>>;
   modelOutput: z.infer<z.ZodObject<O>>;
   exampleOutput?: z.infer<z.ZodObject<O>>;
-}) => Record<string, number> | null | undefined;
+}) => Record<M, number> | null | undefined;
 
 export interface LazyExampleProvider<
   I extends z.ZodRawShape = z.ZodRawShape,
@@ -39,6 +40,7 @@ export type ModelExamples<
 export interface ModelDefinition<
   I extends z.ZodRawShape = z.ZodRawShape,
   O extends z.ZodRawShape = z.ZodRawShape,
+  M extends string = string,
 > {
   name?: string;
   student: string;
@@ -48,8 +50,8 @@ export interface ModelDefinition<
   input: z.ZodObject<I>;
   output: z.ZodObject<O>;
   examples: ModelExamples<I, O>;
-  metric?: ModelMetricFn<I, O>;
-  metricWeights?: Record<string, number>;
+  metric: ModelMetricFn<I, O, M>;
+  metricWeights: Record<M, number>;
   split?: [number, number, number];
   targetScore?: number;
   maxIterations?: number;

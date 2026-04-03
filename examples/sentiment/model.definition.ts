@@ -35,6 +35,8 @@ export default defineModel({
     { input: { reviewText: 'It is a product. It exists.' }, output: { sentiment: 'neutral', confidence: 0.65 } },
   ],
 
+  metricWeights: { accuracy: 1 },
+
   metric: ({ modelOutput, exampleOutput }) => {
     if (!exampleOutput) return null;
     return { accuracy: modelOutput.sentiment === exampleOutput.sentiment ? 1 : 0 };

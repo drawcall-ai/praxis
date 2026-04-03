@@ -151,13 +151,17 @@ async function train(
     throw new Error(`split must sum to 1.0, got [${split.join(', ')}] = ${splitSum}`);
   }
 
-  const userMetricKeys = await probeMetricKeys(definition, provider);
+  const userMetricKeys = Object.keys(definition.metricWeights);
   const metricKeys = [...userMetricKeys, 'tokenEfficiency'];
-  const weights = definition.metricWeights;
-  const effectiveWeights: Record<string, number> = {
-    ...weights,
-    tokenEfficiency: definition.metricWeights?.tokenEfficiency ?? DEFAULT_TOKEN_EFFICIENCY_WEIGHT,
+  const rawWeights: Record<string, number> = {
+    ...definition.metricWeights,
+    tokenEfficiency: DEFAULT_TOKEN_EFFICIENCY_WEIGHT,
   };
+  const weightSum = Object.values(rawWeights).reduce((a, b) => a + b, 0);
+  const effectiveWeights: Record<string, number> = {};
+  for (const [k, v] of Object.entries(rawWeights)) {
+    effectiveWeights[k] = weightSum > 0 ? v / weightSum : v;
+  }
 
   // ── Train/val/test split (index-based, no full materialization) ──
   const indices = [...Array(provider.length).keys()];
@@ -220,13 +224,28 @@ async function train(
           openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
         },
       } as const;
-      const result = await pRetry(() => aiGenerateText(generateArgs), {
-        retries: 2,
-        shouldRetry: (err) => err instanceof NoObjectGeneratedError || err instanceof NoOutputGeneratedError,
-        onFailedAttempt(err: any) {
-          console.log(`  ${dim(`[eval] example #${id} failed (${err.message?.slice(0, 80)}), retry ${err.attemptNumber}/3...`)}`);
-        },
-      });
+      let result;
+      try {
+        result = await pRetry(() => aiGenerateText(generateArgs), {
+          retries: 2,
+          shouldRetry: (err) => err instanceof NoObjectGeneratedError || err instanceof NoOutputGeneratedError,
+          onFailedAttempt(err: any) {
+            console.log(`  ${dim(`[eval] example #${id} failed (${err.message?.slice(0, 80)}), retry ${err.attemptNumber}/3...`)}`);
+          },
+        });
+      } catch (err: any) {
+        if (err instanceof NoObjectGeneratedError || err instanceof NoOutputGeneratedError) {
+          console.log(`  ${dim(`[eval] example #${id} failed after all retries, scoring as zero`)}`);
+          resultMap.set(id, {
+            id, input, modelOutput: {},
+            expectedOutput: (ex.output ?? {}) as Record<string, unknown>,
+            score: Object.fromEntries([...metricKeys, 'tokenEfficiency'].map((k) => [k, 0])),
+            reasoning: '', actualCost: 0, optimalCost: 0,
+          });
+          return;
+        }
+        throw err;
+      }
       const modelOutput = result.output as Record<string, unknown>;
       let reasoning = '';
       if (typeof result.reasoning === 'string') {
@@ -237,7 +256,7 @@ async function train(
           .map((r) => r.text)
           .join('\n');
       }
-      const userScore = definition.metric!({
+      const userScore = definition.metric({
         input: ex.input as Record<string, unknown>,
         modelOutput: modelOutput as any,
         exampleOutput: ex.output as any,
@@ -293,8 +312,8 @@ async function train(
 
     function emitRow(start: number, end: number, score: Record<string, number>) {
       const label = start === end ? `#${start}` : `#${start}-#${end}`;
-      const vals = metricKeys.map((k) => String(score[k] ?? 0));
-      vals.push(computeCombinedScore(score, effectiveWeights).toFixed(2));
+      const vals = metricKeys.map((k) => `${((score[k] ?? 0) * 100).toFixed(1)}%`);
+      vals.push(`${(computeCombinedScore(score, effectiveWeights) * 100).toFixed(1)}%`);
       rows.push([label, ...vals]);
     }
 
@@ -352,7 +371,6 @@ async function train(
     return `Target: combined score > ${(targetScore! * 100).toFixed(1)}% on the validation-set. Build a configuration that generalizes to the problem.`;
   }
 
-  const baselinePrompt = currentPrompt;
 
   // ── Agent system prompt ──────────────────────────────────────────
 
@@ -385,12 +403,10 @@ A system prompt can include any combination of: role/persona, step-by-step algor
 ## Workflow
 
 1. **Test** a subset of training examples to get a baseline score and a runId
-2. **Diagnose** — call view_input on failing IDs, then view_output on the same runId+IDs to see the model's reasoning and where it went wrong
+2. **Diagnose** — call view_input on failing IDs, then view_output to see predictions, and view_thoughts to read the model's internal reasoning
 3. **Improve** — write a new configuration (prompt, reasoning effort) that addresses the observed errors
 4. **Verify** — test the failing examples again to confirm the fix
-5. **Repeat** from step 2 if failures remain
-
-NEVER write a prompt without first inspecting examples and model reasoning via view_input and view_output.`;
+5. **Repeat** from step 2 if failures remain`;
 
   // ── Pre-optimization val baseline ─────────────────────────────────
   console.log(`  Evaluating baseline on val set... ${elapsed()}`);
@@ -525,7 +541,7 @@ Start by testing a batch of examples, then use view_input and view_output to und
     }),
 
     view_output: tool({
-      description: "View predictions, scores, and the target model's internal reasoning for specific examples from a previous run. Returns a compact table + reasoning.",
+      description: "View predictions and scores for specific examples from a previous run. Returns a compact table.",
       inputSchema: z.object({
         runId: z.string().describe('The runId from a previous test_examples call'),
         exampleIds: z.array(z.number()).describe('Example indices to view'),
@@ -549,13 +565,33 @@ Start by testing a batch of examples, then use view_input and view_output to und
         });
         const table = formatTable(columns, rows);
 
-        const reasonings = requested
-          .filter((r) => r.reasoning)
-          .map((r) => `#${r.id}: ${r.reasoning}`);
+        return table;
+      },
+    }),
 
-        return reasonings.length > 0
-          ? `${table}\n\n${reasonings.join('\n\n')}`
-          : table;
+    view_thoughts: tool({
+      description: "View the target model's internal reasoning/thoughts for specific examples from a previous run. Use this to understand why the model produced a particular output.",
+      inputSchema: z.object({
+        runId: z.string().describe('The runId from a previous test_examples call'),
+        exampleIds: z.array(z.number()).describe('Example indices to view'),
+      }),
+      execute: async ({ runId, exampleIds }) => {
+        const runResults = runs.get(runId);
+        if (!runResults) return `Run "${runId}" not found. Available: ${[...runs.keys()].join(', ')}`;
+
+        const requested = exampleIds
+          .map((id) => runResults.find((r) => r.id === id))
+          .filter(Boolean) as EvalResult[];
+
+        if (requested.length === 0) return 'No matching examples found.';
+
+        const thoughts = requested
+          .filter((r) => r.reasoning)
+          .map((r) => `[Example #${r.id}]\n${r.reasoning}`);
+
+        return thoughts.length > 0
+          ? thoughts.join('\n\n')
+          : 'No thoughts recorded for these examples.';
       },
     }),
 
@@ -684,23 +720,10 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
   // ── Final test set evaluation ───────────────────────────────────
   console.log(`  Evaluating on test set... ${elapsed()}`);
-  const [baselineTest, finalTest] = await Promise.all([
-    evaluate(baselinePrompt, testIndices),
-    evaluate(acceptedPrompt, testIndices),
-  ]);
-  const baselineTestScores = avgScores(baselineTest.results);
-  const baselineCombined = computeCombinedScore(baselineTestScores, effectiveWeights);
-  console.log(`  ${green('✓')} Baseline (test): ${summarize(baselineTest.results)} ${elapsed()}`);
+  const finalTest = await evaluate(acceptedPrompt, testIndices);
   const finalTestScores = avgScores(finalTest.results);
   const finalCombined = computeCombinedScore(finalTestScores, effectiveWeights);
   console.log(`  ${green('✓')} Final (test): ${summarize(finalTest.results)} ${elapsed()}`);
-
-  const delta = (finalCombined - baselineCombined) * 100;
-  if (delta >= 0) {
-    console.log(`  ${green('✓')} combinedScore improved by ${delta.toFixed(1)} pp`);
-  } else {
-    console.log(`  ${dim(`combinedScore regressed by ${Math.abs(delta).toFixed(1)} pp`)}`);
-  }
 
   const acceptedScores = finalTestScores;
 
@@ -727,7 +750,7 @@ Start by testing a batch of examples, then use view_input and view_output to und
         stats: {
           agentSteps: totalSteps,
           iterations: checkpoints.length,
-          baselineCombined,
+          baselineCombined: valBaselineCombined,
           finalCombined,
           elapsedMs: Date.now() - startTime,
         },
@@ -740,16 +763,3 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
-
-
-async function probeMetricKeys(def: ModelDefinition, provider: ExampleProvider): Promise<string[]> {
-  if (provider.length === 0 || !def.metric) return ['default'];
-  const example = await provider.get(0);
-  const result = def.metric({
-    input: example.input as Record<string, unknown>,
-    modelOutput: (example.output ?? {}) as Record<string, unknown>,
-    exampleOutput: example.output as Record<string, unknown> | undefined,
-  });
-  if (result == null) return ['default'];
-  return Object.keys(result);
-}

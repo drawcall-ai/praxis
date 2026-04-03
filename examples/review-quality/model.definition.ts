@@ -41,6 +41,8 @@ export default defineModel({
     { input: { reviewText: 'Perfect gift for my mom. The ceramic finish looks premium and the 2-year warranty is a plus.' }, output: { quality: 'helpful', sentiment: 'positive', hasSpecificDetails: true } },
   ],
 
+  metricWeights: { quality: 1, sentiment: 1, details: 1 },
+
   metric: ({ modelOutput, exampleOutput }) => {
     if (!exampleOutput) return null;
     return {

@@ -51,67 +51,67 @@
     }
   },
   "optimization": {
-    "instruction": "Analyze review. Return JSON:\n{\"quality\":\"helpful\" (useful info) | \"unhelpful\", \"sentiment\":\"positive\"|\"negative\"|\"neutral\", \"hasSpecificDetails\":bool (mentions specs/features/details)}",
+    "instruction": "JSON:{\"quality\":\"helpful\"|\"unhelpful\",\"sentiment\":\"positive\"|\"negative\"|\"neutral\",\"hasSpecificDetails\":bool}",
     "reasoningEffort": "minimal",
     "bestScore": {
       "quality": 1,
       "sentiment": 1,
       "details": 1,
-      "tokenEfficiency": 0.9723330090417415
+      "tokenEfficiency": 0.9776623554814157
     },
     "metricWeights": {
-      "tokenEfficiency": 0.1
+      "tokenEfficiency": 1
     },
     "evalRuns": [
       {
         "input": {
-          "reviewText": "Screen resolution is 1080p, colors are accurate. Touch response is slightly laggy."
+          "reviewText": "Bad."
         },
         "expectedOutput": {
-          "quality": "helpful",
-          "sentiment": "neutral",
-          "hasSpecificDetails": true
+          "quality": "unhelpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": false
         },
         "modelOutput": {
-          "quality": "helpful",
-          "sentiment": "neutral",
-          "hasSpecificDetails": true
+          "quality": "unhelpful",
+          "sentiment": "negative",
+          "hasSpecificDetails": false
         },
         "score": {
           "quality": 1,
           "sentiment": 1,
           "details": 1,
-          "tokenEfficiency": 0.9720632783574554
+          "tokenEfficiency": 0.978494623655914
         }
       },
       {
         "input": {
-          "reviewText": "DO NOT BUY THIS PRODUCT"
+          "reviewText": "It is what it is."
         },
         "expectedOutput": {
           "quality": "unhelpful",
-          "sentiment": "negative",
+          "sentiment": "neutral",
           "hasSpecificDetails": false
         },
         "modelOutput": {
           "quality": "unhelpful",
-          "sentiment": "negative",
+          "sentiment": "neutral",
           "hasSpecificDetails": false
         },
         "score": {
           "quality": 1,
           "sentiment": 1,
           "details": 1,
-          "tokenEfficiency": 0.9726027397260274
+          "tokenEfficiency": 0.9768300873069173
         }
       }
     ],
     "stats": {
-      "agentSteps": 18,
+      "agentSteps": 12,
       "iterations": 2,
-      "baselineCombined": 0.9949770965170999,
-      "finalCombined": 0.9991075164207013,
-      "elapsedMs": 168696
+      "baselineCombined": 0.8750214749851061,
+      "finalCombined": 0.9944155888703539,
+      "elapsedMs": 74357
     }
   }
 }
