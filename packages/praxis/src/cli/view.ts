@@ -897,11 +897,6 @@ function buildHTML(): string {
         addStat('flask-conical', 'Test', testAvg.toFixed(2), cls);
       }
 
-      // Temperature (show even if 0, since it's a meaningful setting)
-      if (opt.temperature != null) {
-        addStat('thermometer', 'Temp', String(opt.temperature));
-      }
-
       // Reasoning effort
       if (opt.reasoningEffort != null) {
         addStat('brain', 'Reasoning', opt.reasoningEffort);

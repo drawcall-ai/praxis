@@ -79,7 +79,6 @@ export interface ModelConfig {
   schema: PraxisConfigSchema;
   optimization: {
     instruction: string;
-    temperature?: number;
     reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
     bestScore: Record<string, number>;
     metricWeights?: Record<string, number>;

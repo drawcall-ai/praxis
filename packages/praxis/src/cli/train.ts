@@ -29,8 +29,7 @@ const MAX_TEST_PER_CALL = 20;
 const DEFAULT_MAX_TESTS_PER_ITERATION = 100;
 const MAX_VAL_EXAMPLES = 30;
 const MAX_TEST_EXAMPLES = 30;
-const DEFAULT_TEMPERATURE = 1;
-const DEFAULT_REASONING_EFFORT = 'xhigh' as const;
+const DEFAULT_REASONING_EFFORT = 'medium' as const;
 const DEFAULT_SPLIT = [0.7, 0.15, 0.15] as const;
 const DEFAULT_MAX_ITERATIONS = 5;
 const DEFAULT_TOKEN_EFFICIENCY_WEIGHT = 0.1;
@@ -189,7 +188,6 @@ async function train(
   function nextRunId() { return `run-${++runCounter}`; }
 
   let currentPrompt = buildDefaultSystemPrompt(definition);
-  let currentTemperature = DEFAULT_TEMPERATURE;
   let currentReasoningEffort: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' = DEFAULT_REASONING_EFFORT;
   let baselineMediumCost: number | undefined;
 
@@ -217,7 +215,6 @@ async function train(
         system: systemPrompt,
         prompt: userContent,
         output: Output.object({ schema: definition.output }),
-        temperature: currentTemperature,
         providerOptions: {
           openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
         },
@@ -354,7 +351,7 @@ async function train(
   const schemaDesc = formatSchemaForPrompt(definition);
   const metricDesc = `Multi-metric: ${metricKeys.join(', ')}. Weights: ${JSON.stringify(effectiveWeights)}.`;
 
-  const agentSystemPrompt = `You are a prompt optimization agent. Your goal is to find the best configuration — system prompt, temperature, and reasoning effort — for a target LLM.
+  const agentSystemPrompt = `You are a prompt optimization agent. Your goal is to find the best configuration — system prompt and reasoning effort — for a target LLM.
 
 ## Task
 ${definition.name ? `**${definition.name}** — ` : ''}${definition.description ?? ''}
@@ -381,7 +378,7 @@ A system prompt can include any combination of: role/persona, step-by-step algor
 
 1. **Test** a subset of training examples to get a baseline score and a runId
 2. **Diagnose** — call view_input on failing IDs, then view_output on the same runId+IDs to see the model's reasoning and where it went wrong
-3. **Improve** — write a new configuration (prompt, temperature, reasoning effort) that addresses the observed errors
+3. **Improve** — write a new configuration (prompt, reasoning effort) that addresses the observed errors
 4. **Verify** — test the failing examples again to confirm the fix
 5. **Repeat** from step 2 if failures remain
 
@@ -419,13 +416,11 @@ NEVER write a prompt without first inspecting examples and model reasoning via v
 
   interface Checkpoint {
     prompt: string;
-    temperature: number;
     reasoningEffort: typeof currentReasoningEffort;
     valCombined: number;
   }
   const checkpoints: Checkpoint[] = [{
     prompt: currentPrompt,
-    temperature: currentTemperature,
     reasoningEffort: currentReasoningEffort,
     valCombined: valBaselineCombined,
   }];
@@ -434,7 +429,6 @@ NEVER write a prompt without first inspecting examples and model reasoning via v
   const userMessage = `You have ${trainIndices.length} training examples available (indices 0-${trainIndices.length - 1}).
 You can run up to ${maxTestsPerIteration} test runs this iteration. Each example ID passed to test_examples counts as one test run — re-testing the same example costs another run.
 
-Current temperature: ${currentTemperature}
 Current reasoning effort: ${currentReasoningEffort}
 
 ## Baseline Validation Scores
@@ -557,18 +551,6 @@ Start by testing a batch of examples, then use view_input and view_output to und
       },
     }),
 
-    set_temperature: tool({
-      description: 'Set the temperature for the target model (default 0).',
-      inputSchema: z.object({
-        temperature: z.number().min(0).max(2).describe('Temperature value'),
-      }),
-      execute: async ({ temperature }) => {
-        currentTemperature = temperature;
-        console.log(`  ${dim(`[set_temperature] ${temperature}`)}`);
-        return `Temperature set to ${temperature}.`;
-      },
-    }),
-
     set_reasoning_effort: tool({
       description: 'Set the reasoning effort level for the target model (default xhigh).',
       inputSchema: z.object({
@@ -654,7 +636,6 @@ Start by testing a batch of examples, then use view_input and view_output to und
 
     checkpoints.push({
       prompt: currentPrompt,
-      temperature: currentTemperature,
       reasoningEffort: currentReasoningEffort,
       valCombined,
     });
@@ -687,7 +668,6 @@ Start by testing a batch of examples, then use view_input and view_output to und
     cp.valCombined > best.valCombined ? cp : best,
   );
   const acceptedPrompt = bestCheckpoint.prompt;
-  currentTemperature = bestCheckpoint.temperature;
   currentReasoningEffort = bestCheckpoint.reasoningEffort;
 
   const bestIdx = checkpoints.indexOf(bestCheckpoint);
@@ -732,7 +712,6 @@ Start by testing a batch of examples, then use view_input and view_output to und
       schema: serializeSchema(definition),
       optimization: {
         instruction: acceptedPrompt,
-        temperature: currentTemperature,
         reasoningEffort: currentReasoningEffort,
         bestScore: acceptedScores,
         metricWeights: effectiveWeights,

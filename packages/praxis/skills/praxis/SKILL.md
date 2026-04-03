@@ -156,11 +156,10 @@ const { output, score } = await generateText({
   config: modelConfig,
 });
 
-// With AI SDK options (temperature, topP, maxRetries, mode, seed, etc.)
+// With AI SDK options (topP, maxRetries, mode, seed, etc.)
 const { output } = await generateText({
   definition: modelDefinition,
   input: { text: 'Hello' },
-  temperature: 0.5,
   maxRetries: 3,
 });
 ```
