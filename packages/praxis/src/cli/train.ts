@@ -29,6 +29,7 @@ const MAX_TEST_PER_CALL = 20;
 const DEFAULT_MAX_TESTS_PER_ITERATION = 100;
 const MAX_VAL_EXAMPLES = 30;
 const MAX_TEST_EXAMPLES = 30;
+const DEFAULT_MAX_OUTPUT_TOKENS = 16384;
 const DEFAULT_REASONING_EFFORT = 'medium' as const;
 const DEFAULT_SPLIT = [0.7, 0.15, 0.15] as const;
 const DEFAULT_MAX_ITERATIONS = 5;
@@ -210,16 +211,36 @@ async function train(
       const userContent = Object.entries(input)
         .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
         .join('\n');
-      const result = await aiGenerateText({
+      let result = await aiGenerateText({
         model,
         system: systemPrompt,
         prompt: userContent,
         output: Output.object({ schema: definition.output }),
+        maxOutputTokens: definition.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
         providerOptions: {
           openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
         },
       });
-      const modelOutput = (result.output ?? {}) as Record<string, unknown>;
+      if (result.output == null && result.finishReason === 'length') {
+        console.log(`  ${dim(`[eval] example #${id} hit token limit (likely repetition loop), retrying...`)}`);
+        result = await aiGenerateText({
+          model,
+          system: systemPrompt,
+          prompt: userContent,
+          output: Output.object({ schema: definition.output }),
+          maxOutputTokens: definition.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+          providerOptions: {
+            openrouter: { reasoning: { effort: currentReasoningEffort, exclude: false } },
+          },
+        });
+      }
+      if (result.output == null) {
+        throw new Error(
+          `No output generated for example #${id} (finishReason: ${result.finishReason}). ` +
+          `Raw text: ${result.text?.slice(0, 500)}`,
+        );
+      }
+      const modelOutput = result.output as Record<string, unknown>;
       let reasoning = '';
       if (typeof result.reasoning === 'string') {
         reasoning = result.reasoning;
@@ -731,6 +752,8 @@ Start by testing a batch of examples, then use view_input and view_output to und
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
+
+
 
 async function probeMetricKeys(def: ModelDefinition, provider: ExampleProvider): Promise<string[]> {
   if (provider.length === 0 || !def.metric) return ['default'];

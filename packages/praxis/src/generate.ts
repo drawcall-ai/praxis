@@ -48,6 +48,7 @@ export async function generateText<I extends z.ZodRawShape, O extends z.ZodRawSh
     model,
     messages: prompt.messages,
     output: Output.object({ schema: prompt.schema.output }),
+    maxOutputTokens: options.maxOutputTokens ?? 16384,
     providerOptions: {
       openrouter: {
         reasoning: {

@@ -54,6 +54,7 @@ export interface ModelDefinition<
   targetScore?: number;
   maxIterations?: number;
   maxTestsPerIteration?: number;
+  maxOutputTokens?: number;
 }
 
 // ── Config (model.config.json) ──────────────────────────────────────
