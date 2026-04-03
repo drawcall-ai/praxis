@@ -51,99 +51,67 @@
     }
   },
   "optimization": {
-    "instruction": "# Role\nYou are an expert consumer product review analyst. Your task is to evaluate product reviews for quality, sentiment, and the presence of specific details.\n\n# Evaluation Criteria\n\n## 1. Quality (`quality`)\n- **helpful**: The review provides useful information that helps a potential buyer make an informed decision. This includes product specifications, performance data, specific pros/cons, or detailed accounts of usage.\n- **unhelpful**: The review is too vague, brief, or purely emotional without providing context or facts. Commands like \"Do not buy\" or simple adjectives like \"Great\" without explanation are unhelpful.\n\n## 2. Sentiment (`sentiment`)\n- **positive**: The overall tone is favorable, or the pros significantly outweigh the cons.\n- **negative**: The overall tone is unfavorable, or the cons significantly outweigh the pros.\n- **neutral**: The review is indifferent, purely factual, or contains a balanced mix of positive and negative points (e.g., \"The screen is great, but the battery is bad\").\n\n## 3. Specific Details (`hasSpecificDetails`)\n- **true**: The review mentions specific product features (e.g., \"zipper\", \"1080p\", \"waterproof coating\"), technical specifications, quantity/time measurements (e.g., \"8 hours\", \"3 days\"), or specific failure modes.\n- **false**: The review uses only generic language (e.g., \"this product\", \"it\", \"everything\") and lacks detail.\n\n# Output Format\nRespond ONLY with a JSON object in the following format:\n{\n  \"quality\": \"helpful\" | \"unhelpful\",\n  \"sentiment\": \"positive\" | \"negative\" | \"neutral\",\n  \"hasSpecificDetails\": boolean\n}\n\n# Reasoning Steps\n1. Scan the text for specific nouns, measurements, or unique attributes related to the product or experience.\n2. Determine if these details provide enough context to assist a buyer.\n3. Weigh the positive and negative descriptors. If they are balanced or the review is just a neutral statement of facts, label as \"neutral\".\n4. Construct the final JSON output.",
+    "instruction": "Analyze review. Return JSON:\n{\"quality\":\"helpful\" (useful info) | \"unhelpful\", \"sentiment\":\"positive\"|\"negative\"|\"neutral\", \"hasSpecificDetails\":bool (mentions specs/features/details)}",
+    "reasoningEffort": "minimal",
     "bestScore": {
       "quality": 1,
       "sentiment": 1,
-      "details": 1
+      "details": 1,
+      "tokenEfficiency": 0.9723330090417415
+    },
+    "metricWeights": {
+      "tokenEfficiency": 0.1
     },
     "evalRuns": [
       {
         "input": {
-          "reviewText": "Perfect gift for my mom. The ceramic finish looks premium and the 2-year warranty is a plus."
+          "reviewText": "Screen resolution is 1080p, colors are accurate. Touch response is slightly laggy."
         },
         "expectedOutput": {
           "quality": "helpful",
-          "sentiment": "positive",
+          "sentiment": "neutral",
           "hasSpecificDetails": true
         },
         "modelOutput": {
           "quality": "helpful",
-          "sentiment": "positive",
+          "sentiment": "neutral",
           "hasSpecificDetails": true
         },
         "score": {
           "quality": 1,
           "sentiment": 1,
-          "details": 1
+          "details": 1,
+          "tokenEfficiency": 0.9720632783574554
         }
       },
       {
         "input": {
-          "reviewText": "Love it!!!!!!"
+          "reviewText": "DO NOT BUY THIS PRODUCT"
         },
         "expectedOutput": {
           "quality": "unhelpful",
-          "sentiment": "positive",
+          "sentiment": "negative",
           "hasSpecificDetails": false
         },
         "modelOutput": {
           "quality": "unhelpful",
-          "sentiment": "positive",
+          "sentiment": "negative",
           "hasSpecificDetails": false
         },
         "score": {
           "quality": 1,
           "sentiment": 1,
-          "details": 1
-        }
-      },
-      {
-        "input": {
-          "reviewText": "The 12W motor handles frozen fruit easily. Cleanup is simple — dishwasher safe blades."
-        },
-        "expectedOutput": {
-          "quality": "helpful",
-          "sentiment": "positive",
-          "hasSpecificDetails": true
-        },
-        "modelOutput": {
-          "quality": "helpful",
-          "sentiment": "positive",
-          "hasSpecificDetails": true
-        },
-        "score": {
-          "quality": 1,
-          "sentiment": 1,
-          "details": 1
-        }
-      },
-      {
-        "input": {
-          "reviewText": "After 6 months of daily use the non-stick coating started peeling. Heats unevenly on the edges."
-        },
-        "expectedOutput": {
-          "quality": "helpful",
-          "sentiment": "negative",
-          "hasSpecificDetails": true
-        },
-        "modelOutput": {
-          "quality": "helpful",
-          "sentiment": "negative",
-          "hasSpecificDetails": true
-        },
-        "score": {
-          "quality": 1,
-          "sentiment": 1,
-          "details": 1
+          "details": 1,
+          "tokenEfficiency": 0.9726027397260274
         }
       }
     ],
     "stats": {
-      "agentSteps": 7,
-      "baselineCombined": 1,
-      "finalCombined": 1,
-      "elapsedMs": 58168
+      "agentSteps": 18,
+      "iterations": 2,
+      "baselineCombined": 0.9949770965170999,
+      "finalCombined": 0.9991075164207013,
+      "elapsedMs": 168696
     }
   }
 }

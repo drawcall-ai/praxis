@@ -1,6 +1,6 @@
 import { resolve, dirname } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
-import { generateText as aiGenerateText, Output, tool, wrapLanguageModel, extractJsonMiddleware } from 'ai';
+import { generateText as aiGenerateText, NoObjectGeneratedError, Output, tool, wrapLanguageModel, extractJsonMiddleware } from 'ai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { z } from 'zod';
 import pMap from 'p-map';
@@ -224,9 +224,9 @@ async function train(
       } as const;
       const result = await pRetry(() => aiGenerateText(generateArgs), {
         retries: 2,
+        shouldRetry: (err) => err instanceof NoObjectGeneratedError,
         onFailedAttempt(err: any) {
-          const reason = err.finishReason === 'length' ? 'token limit / repetition loop' : 'failed to parse';
-          console.log(`  ${dim(`[eval] example #${id} ${reason}, retrying (${err.attemptNumber}/${err.retriesLeft + err.attemptNumber})...`)}`);
+          console.log(`  ${dim(`[eval] example #${id} failed (${err.message?.slice(0, 80)}), retry ${err.attemptNumber}/3...`)}`);
         },
       });
       const modelOutput = result.output as Record<string, unknown>;
